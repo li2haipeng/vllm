@@ -30,7 +30,8 @@ QUANTIZATION_METHODS: List[str] = [
     "neuron_quant",
     "ipex",
     "quark",
-    "moe_wna16"
+    "moe_wna16",
+    "deepgemm_fp8",
 ]
 
 # The customized quantization methods which will be added to this dict.
@@ -90,6 +91,7 @@ def get_quantization_config(quantization: str) -> Type[QuantizationConfig]:
     from .experts_int8 import ExpertsInt8Config
     from .fbgemm_fp8 import FBGEMMFp8Config
     from .fp8 import Fp8Config
+    from .deepgemm_fp8 import DeepGEMMFp8Config
     from .gguf import GGUFConfig
     from .gptq import GPTQConfig
     from .gptq_marlin import GPTQMarlinConfig
@@ -111,6 +113,7 @@ def get_quantization_config(quantization: str) -> Type[QuantizationConfig]:
         "tpu_int8": Int8TpuConfig,
         "fp8": Fp8Config,
         "fbgemm_fp8": FBGEMMFp8Config,
+        "deepgemm_fp8": DeepGEMMFp8Config,
         "modelopt": ModelOptFp8Config,
         # The order of gptq methods is important for config.py iteration over
         # override_quantization_method(..)
