@@ -770,7 +770,7 @@ class FusedMoE(torch.nn.Module):
                                                  cu_tokens_across_dp_cpu)
             router_logits = self.naive_multicast(router_logits,
                                                  cu_tokens_across_dp_cpu)
-
+        print(self.quant_method)
         # Matrix multiply.
         final_hidden_states = self.quant_method.apply(
             layer=self,

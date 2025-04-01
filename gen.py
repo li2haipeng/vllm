@@ -21,7 +21,9 @@ sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 if __name__ == "__main__":
 
     # Create an LLM.
-    llm = LLM(model="/home/ubuntu/models/DeepSeek-V3", tensor_parallel_size=8, trust_remote_code=True, enforce_eager=False)
+    model = "nm-testing/DeepSeek-Coder-V2-Lite-Instruct-FP8"
+    model = "/home/ubuntu/models/DeepSeek-V3"
+    llm = LLM(model, tensor_parallel_size=1, trust_remote_code=True, enforce_eager=True)
 
     llm.start_profile()
 

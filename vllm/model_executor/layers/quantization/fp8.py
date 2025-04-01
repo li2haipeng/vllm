@@ -528,6 +528,25 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             layer.w13_input_scale = None
             layer.w2_input_scale = None
 
+        device = w13_weight.device
+        # TODO strides can be shared across multiple layers
+        self.ab_strides1 = torch.full((num_experts, ),
+                                      hidden_size,
+                                      device=device,
+                                      dtype=torch.int64)
+        self.c_strides1 = torch.full((num_experts, ),
+                                     2 * intermediate_size_per_partition,
+                                     device=device,
+                                     dtype=torch.int64)
+        self.ab_strides2 = torch.full((num_experts, ),
+                                      intermediate_size_per_partition,
+                                      device=device,
+                                      dtype=torch.int64)
+        self.c_strides2 = torch.full((num_experts, ),
+                                     hidden_size,
+                                     device=device,
+                                     dtype=torch.int64)
+
     def process_weights_after_loading(self, layer: Module) -> None:
         # TODO (rob): refactor block quant into separate class.
         if self.block_quant:
@@ -703,6 +722,24 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             a2_scale=layer.w2_input_scale,
             block_shape=self.quant_config.weight_block_size,
         )
+        # from vllm.model_executor.layers.fused_moe import cutlass_moe_fp8
+        # # breakpoint()
+        # return cutlass_moe_fp8(
+        #     x,
+        #     layer.w13_weight.transpose(1, 2),
+        #     layer.w2_weight.transpose(1, 2),
+        #     layer.w13_weight_scale_inv,
+        #     layer.w2_weight_scale_inv,
+        #     topk_weights,
+        #     topk_ids,
+        #     self.ab_strides1,
+        #     self.c_strides1,
+        #     self.ab_strides2,
+        #     self.c_strides2,
+        #     a1_scale=layer.w13_input_scale,
+        #     a2_scale=layer.w2_input_scale,
+        #     out_dtype=x.dtype,
+        # )
 
 
 class Fp8KVCacheMethod(BaseKVCacheMethod):
