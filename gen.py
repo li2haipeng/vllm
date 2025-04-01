@@ -6,8 +6,9 @@ import time
 from vllm import LLM, SamplingParams
 
 # enable torch profiler, can also be set on cmd line
-os.environ["VLLM_TORCH_PROFILER_DIR"] = "./vllm_profile/"
-
+os.environ['VLLM_USE_DEEP_GEMM'] = '1'
+os.environ["VLLM_TORCH_PROFILER_DIR"] = f"./vllm_profile/{os.environ['VLLM_USE_DEEP_GEMM']}"
+os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
 # Sample prompts.
 prompts = [
     # "Hello, my name is",
@@ -22,8 +23,8 @@ if __name__ == "__main__":
 
     # Create an LLM.
     # breakpoint()
-    llm = LLM(model="/home/ubuntu/models/DeepSeek-V3", tensor_parallel_size=1, trust_remote_code=True, enforce_eager=False)
-
+    llm = LLM(model="/home/ubuntu/DeepSeek-V3", tensor_parallel_size=8, trust_remote_code=True, enforce_eager=False)
+    _ = llm.generate(prompts, sampling_params)
     llm.start_profile()
 
     # Generate texts from the prompts. The output is a list of RequestOutput
