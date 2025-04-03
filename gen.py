@@ -6,11 +6,8 @@ from vllm import envs
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 # enable torch profiler, can also be set on cmd line
-os.environ['VLLM_USE_DEEPGEMM'] = '0'
-os.environ["VLLM_TORCH_PROFILER_DIR"] = f"./vllm_profile/{os.environ['VLLM_USE_DEEPGEMM']}"
-os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
-print(envs.VLLM_USE_DEEPGEMM)
-# breakpoint()
+os.environ["VLLM_TORCH_PROFILER_DIR"] = "./vllm_profile/"
+
 # Sample prompts.
 prompts = [
     # "Hello, my name is",
@@ -38,10 +35,9 @@ if __name__ == "__main__":
 
     # Create an LLM.
     # breakpoint()
-    llm = LLM(model="/home/ubuntu/models/DeepSeek-V3", tensor_parallel_size=8, trust_remote_code=True, enforce_eager=False)
-    _ = llm.generate(prompts, sampling_params)
+    llm = LLM(model="/home/ubuntu/models/DeepSeek-V3", tensor_parallel_size=1, trust_remote_code=True, enforce_eager=False)
 
-    # llm.start_profile()
+    llm.start_profile()
 
     # Generate texts from the prompts. The output is a list of RequestOutput
     # objects that contain the prompt, generated text, and other information.
