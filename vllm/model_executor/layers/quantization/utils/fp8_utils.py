@@ -61,6 +61,7 @@ def apply_w8a8_block_fp8_linear(
             shape_supported_by_cutlass = False
 
     if envs.VLLM_USE_DEEPGEMM and block_size == [128, 128]:
+        logger.info_once("Using deep gemm for dense linear")
         import deep_gemm
         q_input, x_scale = per_token_group_quant_fp8(input_2d, block_size[1])
         output = torch.empty((input_2d.shape[0], weight.shape[0]),

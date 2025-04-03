@@ -56,7 +56,7 @@ from .interfaces import SupportsPP
 from .utils import (PPMissingLayer, is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
-
+from tqdm import tqdm
 
 class DeepseekV2MLP(nn.Module):
 
@@ -105,20 +105,27 @@ class DeepseekV2MoE(nn.Module):
         self.tp_size = get_tensor_model_parallel_world_size()
         self.routed_scaling_factor = config.routed_scaling_factor
         self.n_shared_experts = config.n_shared_experts
-        self.routed_scaling_factor = config.routed_scaling_factor
+        # self.routed_scaling_factor = config.routed_scaling_factor
+        self.n_routed_experts = config.n_routed_experts
 
         if config.hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {config.hidden_act}. "
                              "Only silu is supported for now.")
 
         self.gate = ReplicatedLinear(config.hidden_size,
-                                     config.n_routed_experts,
-                                     bias=False,
-                                     quant_config=None,
-                                     prefix=f"{prefix}.gate")
+                                      min(config.n_routed_experts, 256),
+                                      #@handing, we limit the gate shape as up to 256, 
+                                      #As we might use more than 256 routed experts 
+                                      #to fuse shared experts into MoE
+                                      bias=False,
+                                      quant_config=None,
+                                      prefix=f"{prefix}.gate")
         if config.topk_method == "noaux_tc":
             self.gate.e_score_correction_bias = nn.Parameter(
-                torch.empty(config.n_routed_experts))
+                torch.empty(min(config.n_routed_experts, 256)))
+                 #@handing, we limit the gate shape as up to 256, 
+                 #As we might use more than 256 routed experts 
+                 #to fuse shared experts into MoE
         else:
             self.gate.e_score_correction_bias = None
 
@@ -151,8 +158,12 @@ class DeepseekV2MoE(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        if self.n_shared_experts is not None:
+        if self.n_shared_experts is not None and self.n_routed_experts == 256:
+            #@handing. Here we skip MLP if we have more than 256 routed expert, 
+            # which means we fused the shared expert into MoE.
             shared_output = self.shared_experts(hidden_states)
+        else:
+            shared_output = None
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
         final_hidden_states = self.experts(
@@ -708,7 +719,32 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
-
+        #@handing, the following code is to convert model weight to fuse shared experts into MoE module.
+        weights_list = list(weights)
+        if self.config.n_routed_experts > 256:
+            weights_dict = {k:v for (k,v) in weights_list}
+            suffix_list =[
+                    'down_proj.weight',
+                    'down_proj.weight_scale_inv',
+                    'gate_proj.weight',
+                    'gate_proj.weight_scale_inv',
+                    'up_proj.weight',
+                    'up_proj.weight_scale_inv'
+                ]
+            current_device = torch.cuda.current_device()
+            is_master = (current_device == 0)
+            for moe_layer in tqdm(range(self.config.num_hidden_layers), desc="Cloning shared expert into MoE" , disable=not is_master):
+                if moe_layer < self.config.first_k_dense_replace:
+                    continue
+                for num_repeat in range(self.config.n_routed_experts - 256):
+                    for suffix in suffix_list:
+                        weights_list.append(
+                            (
+                                f"model.layers.{moe_layer}.mlp.experts.{256 + num_repeat}.{suffix}",
+                                weights_dict[f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"].clone())
+                            )
+        # else:
+        #     raise RuntimeError(f"self.config.n_routed_experts = {self.config.n_routed_experts}, should be larger than 256 to enable fused share expert")
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
         expert_params_mapping = FusedMoE.make_expert_params_mapping(
@@ -719,7 +755,7 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
 
         params_dict = dict(self.named_parameters())
         loaded_params: Set[str] = set()
-        for name, loaded_weight in weights:
+        for name, loaded_weight in weights_list:
             if "rotary_emb.inv_freq" in name:
                 continue
 
