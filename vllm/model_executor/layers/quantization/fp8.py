@@ -435,7 +435,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
 
         # Check for DeepGemm support.
         self.allow_deep_gemm = False
-        if envs.VLLM_USE_DEEP_GEMM:
+        if envs.VLLM_USE_DEEPGEMM:
             if not has_deep_gemm:
                 logger.warning_once("Failed to import DeepGemm kernels.")
             elif (current_platform.is_cuda()

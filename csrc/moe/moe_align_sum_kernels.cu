@@ -204,10 +204,10 @@ __global__ void sgl_moe_align_block_size_kernel(
     scalar_t* __restrict__ topk_ids, int32_t* sorted_token_ids,
     int32_t* expert_ids, int32_t* total_tokens_post_pad, int32_t num_experts,
     int32_t block_size, size_t numel, int32_t* cumsum) {
-  __shared__ int32_t shared_counts[32][8];
+  __shared__ int32_t shared_counts[32][9];
 
   const int warp_id = threadIdx.x / 32;
-  const int experts_per_warp = 8;
+  const int experts_per_warp = 9;
   const int my_expert_start = warp_id * experts_per_warp;
 
   // Initialize shared_counts for this warp's experts
