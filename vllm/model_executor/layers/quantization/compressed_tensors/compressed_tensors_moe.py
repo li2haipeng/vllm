@@ -66,9 +66,9 @@ class CompressedTensorsMoEMethod(FusedMoEMethodBase):
                 return CompressedTensorsWNA16MoEMethod(quant_config)
             else:
                 return CompressedTensorsWNA16MarlinMoEMethod(quant_config)
-        # elif (quant_config._is_fp8_w8a8_sm90(weight_quant, input_quant)
-        #       and layer.activation == "silu"):
-        #     return CompressedTensorsW8A8Fp8MoECutlassMethod(quant_config)
+        elif (quant_config._is_fp8_w8a8_sm90(weight_quant, input_quant)
+              and layer.activation == "silu"):
+            return CompressedTensorsW8A8Fp8MoECutlassMethod(quant_config)
         elif quant_config._is_fp8_w8a8(weight_quant, input_quant):
             return CompressedTensorsW8A8Fp8MoEMethod(quant_config)
         else:
