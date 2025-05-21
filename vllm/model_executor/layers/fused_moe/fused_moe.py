@@ -658,7 +658,7 @@ def get_moe_configs(
         os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name)
     if os.path.exists(config_file_path):
         with open(config_file_path) as f:
-            logger.info("Using configuration from %s for MoE layer.",
+            logger.info("!!!!!!!!!!!! Using configuration from %s for MoE layer. !!!!!!",
                         config_file_path)
             # If a configuration has been found, return it
             return {int(key): val for key, val in json.load(f).items()}
@@ -666,7 +666,7 @@ def get_moe_configs(
     # If no optimized configuration is available, we will use the default
     # configuration
     logger.warning(
-        ("Using default MoE config. Performance might be sub-optimal! "
+        ("??????????????????????Using default MoE config. Performance might be sub-optimal! "
          "Config file not found at %s"), config_file_path)
     return None
 
@@ -806,6 +806,9 @@ def try_get_optimal_moe_config(
     override_config = get_config()
     if override_config:
         config = override_config
+        print(
+            f"Using override config: {config} for MoE layer. "
+            "Please check the config file in the model executor.")
     else:
         # First try to load optimal config from the file
         E, _, N = w2_shape
