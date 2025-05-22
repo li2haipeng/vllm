@@ -1,24 +1,26 @@
 BS=1
 PROMPT_LEN=1024
-TENSORBORD_DIR=/home/ubuntu/vllm/vllm_profile
-# MODEL=/home/ubuntu/models/Llama-4-Scout
+TENSORBORD_DIR=/home/ubuntu/vllm/vllm_profile_v085
+MODEL_PATH=/home/ubuntu/models
 # export VLLM_USE_DEEP_GEMM=1
-for MODEL in /home/ubuntu/models/DSR1 /home/ubuntu/models/DSR1-awq
+for MODEL in Llama-4-Scout-17B-16E-Instruct-FP8-OS_routed
 do
     echo "Running prefill profiling for model: $MODEL"
     python prefill_profile.py \
-    --model $MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --model $MODEL_PATH/$MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --compilation_config='{"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}' \
     --tensorboard $TENSORBORD_DIR --batch-size $BS \
-    --prompt-len $PROMPT_LEN --vocab-size 128814 \
+    --prompt-len $PROMPT_LEN --vocab-size 128000 \
     run_num_steps -n 5 \
     
     
     
     echo "Running decode profiling for model: $MODEL"
     python decode_profile.py \
-    --model $MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --model $MODEL_PATH/$MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --compilation_config='{"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}' \
     --tensorboard $TENSORBORD_DIR --batch-size $BS \
-    --prompt-len $PROMPT_LEN --vocab-size 128814 \
+    --prompt-len $PROMPT_LEN --vocab-size 128000 \
     run_num_steps -n 5 \
     
 done
