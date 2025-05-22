@@ -78,8 +78,10 @@ class CompressedTensorsMoEMethod(FusedMoEMethodBase):
                 return CompressedTensorsWNA16MarlinMoEMethod(quant_config)
         elif (quant_config._is_fp8_w8a8_sm90(weight_quant, input_quant)
               and layer.activation == "silu"):
+            logger.info_once("Using CUTLASS MoE")
             return CompressedTensorsW8A8Fp8MoECutlassMethod(quant_config)
         elif quant_config._is_fp8_w8a8(weight_quant, input_quant):
+            logger.info_once("Using Triton MoE")
             return CompressedTensorsW8A8Fp8MoEMethod(quant_config)
         elif quant_config._is_dynamic_token_w8a8(weight_quant, input_quant):
             return CompressedTensorsW8A8Int8MoEMethod(quant_config)
