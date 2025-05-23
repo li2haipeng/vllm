@@ -5,7 +5,7 @@ import time
 
 from vllm import LLM, SamplingParams
 
-os.environ["VLLM_TORCH_PROFILER_DIR"] = "./vllm_profile_simple"
+os.environ["VLLM_TORCH_PROFILER_DIR"] = "./vllm_profile"
 # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 prompts = [
     "Hello, my name is",
@@ -24,17 +24,18 @@ if __name__ == "__main__":
     # model_id = "/home/ubuntu/models/Llama-3.3-70B-Instruct-quantized.w4a16"
     # model_id = "/home/ubuntu/models/Llama-4-Scout-per-channel-w4a16"
     # model_id = "/home/ubuntu/models/Llama-4-Scout-per-group-w4a16"
-    model_id = "/home/ubuntu/models/DSR1-awq"
+    model_id = "/home/ubuntu/models/Llama-4-Scout-17B-16E-Instruct-FP8-OS_routed"
     llm = LLM(
         model=model_id,
         tensor_parallel_size=8,
         max_model_len=32768,
-        enforce_eager=True
+        enforce_eager=False,
+        compilation_config={"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}
     )
 
-    # llm.start_profile()
+    llm.start_profile()
     outputs = llm.generate(prompts, sampling_params)
-    # llm.stop_profile()
+    llm.stop_profile()
 
     print("-" * 50)
     for output in outputs:

@@ -8,6 +8,7 @@ do
     echo "Running prefill profiling for model: $MODEL"
     python prefill_profile.py \
     --model $MODEL_PATH/$MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --compilation_config='{"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}' \
     --tensorboard $TENSORBORD_DIR --batch-size $BS \
     --prompt-len $PROMPT_LEN --vocab-size 128000 \
     run_num_steps -n 5 \
@@ -17,6 +18,7 @@ do
     echo "Running decode profiling for model: $MODEL"
     python decode_profile.py \
     --model $MODEL_PATH/$MODEL --tensor-parallel-size 8 --max-model-len 32768 \
+    --compilation_config='{"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}' \
     --tensorboard $TENSORBORD_DIR --batch-size $BS \
     --prompt-len $PROMPT_LEN --vocab-size 128000 \
     run_num_steps -n 5 \
