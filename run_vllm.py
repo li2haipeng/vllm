@@ -24,7 +24,7 @@ if __name__ == "__main__":
     # model_id = "/home/ubuntu/models/Llama-3.3-70B-Instruct-quantized.w4a16"
     # model_id = "/home/ubuntu/models/Llama-4-Scout-per-channel-w4a16"
     # model_id = "/home/ubuntu/models/Llama-4-Scout-per-group-w4a16"
-    model_id = "/home/ubuntu/models/Llama-4-Scout-17B-16E-Instruct-FP8-OS_routed"
+    model_id = "/home/ubuntu/models/Llama-4-Scout-17B-16E-Instruct-W4A8-routed_only"
     llm = LLM(
         model=model_id,
         tensor_parallel_size=8,

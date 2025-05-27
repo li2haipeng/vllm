@@ -9,6 +9,7 @@ python -m vllm.entrypoints.openai.api_server \
     --max-num-seqs 8 \
     --port 8088 \
     --max-model-len 32768 --trust-remote-code \
+    --compilation_config='{"cudagraph_capture_sizes": [1,4,8], "compile_sizes": [1,4,8]}'
     # --quantization moe_wna16
 # vllm serve /home/ubuntu/models/DSR1 \
 #       --served-model-name deepseek-ai/DeepSeek-R1 \
