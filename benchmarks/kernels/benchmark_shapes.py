@@ -90,4 +90,10 @@ WEIGHT_SHAPES_MOE = {
     "ibm-granite/granite-3.0-3b-a800m": [
         [40, 8, 1024, 1536],
     ],
+    "Scout":[
+        [16, 1, 5120, 8192]
+    ],
+    "Maverick":[
+        [128, 1, 5120, 8192]
+    ],
 }

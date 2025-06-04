@@ -6,7 +6,7 @@ from benchmark_shapes import WEIGHT_SHAPES_MOE
 
 from vllm import _custom_ops as ops
 from vllm.config import ParallelConfig, VllmConfig, set_current_vllm_config
-from vllm.model_executor.layers.fused_moe.fused_moe import (
+from vllm.model_executor.layers.fused_moe import (
     cutlass_moe_fp8,
     fused_experts,
     fused_topk,
@@ -14,13 +14,15 @@ from vllm.model_executor.layers.fused_moe.fused_moe import (
 from vllm.utils import FlexibleArgumentParser
 
 DEFAULT_MODELS = [
-    "nm-testing/Mixtral-8x7B-Instruct-v0.1",
-    "nm-testing/deepseekv2-lite",
-    "ibm-granite/granite-3.0-1b-a400m",
-    "ibm-granite/granite-3.0-3b-a800m",
+    # "nm-testing/Mixtral-8x7B-Instruct-v0.1",
+    # "nm-testing/deepseekv2-lite",
+    # "ibm-granite/granite-3.0-1b-a400m",
+    # "ibm-granite/granite-3.0-3b-a800m",
+    "Scout",
+    "Maverick",
 ]
-DEFAULT_BATCH_SIZES = [1, 4, 8, 16, 32, 64, 128, 256, 512]
-DEFAULT_TP_SIZES = [1]
+DEFAULT_BATCH_SIZES = [1, 4, 8, 16, 64, 1024, 2048, 4096, 8192]
+DEFAULT_TP_SIZES = [8]
 
 PER_ACT_TOKEN_OPTS = [False]
 PER_OUT_CH_OPTS = [False]
