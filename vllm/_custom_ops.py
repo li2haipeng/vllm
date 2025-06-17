@@ -851,6 +851,11 @@ def cutlass_moe_mm(out_tensors: torch.Tensor, a_tensors: torch.Tensor,
                      MMs used in the fused MoE operation.
     - a/b/c_strides: The data strides passed to grouped matrix multiplication.
     """
+    # from vllm.distributed import get_tensor_model_parallel_rank
+    # if get_tensor_model_parallel_rank() == 0:
+    #     print("cutlass_moe_mm:", a_tensors.shape, b_tensors.shape,
+    #         expert_offsets.shape, problem_sizes, a_strides.shape,
+    #         b_strides.shape, c_strides.shape)
     return torch.ops._C.cutlass_moe_mm(out_tensors, a_tensors, b_tensors,
                                        a_scales, b_scales, expert_offsets,
                                        problem_sizes, a_strides, b_strides,

@@ -20,10 +20,10 @@ struct sm90_fp8_config_default {
   using EpilogueSchedule =
       cutlass::epilogue::PtrArrayTmaWarpSpecializedPingpong;
 // vLLM default:
-//   using TileShape = cute::Shape<cute::_64, cute::_256, cute::_128>;
-//   using ClusterShape = cute::Shape<cute::_1, cute::_2, cute::_1>;
-  using TileShape = cute::Shape<cute::_128, cute::_128, cute::_128>;
-  using ClusterShape = cute::Shape<cute::_1, cute::_8, cute::_1>;
+  using TileShape = cute::Shape<cute::_64, cute::_256, cute::_128>;
+  using ClusterShape = cute::Shape<cute::_1, cute::_2, cute::_1>;
+  // using TileShape = cute::Shape<cute::_128, cute::_128, cute::_128>;
+  // using ClusterShape = cute::Shape<cute::_1, cute::_2, cute::_1>;
 
   using Cutlass3xGemm =
       cutlass_3x_group_gemm<InType, OutType, Epilogue, TileShape, ClusterShape,

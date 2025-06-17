@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 import msgspec
 import zmq
-
+import torch.cuda.profiler as profiler
 from vllm.config import ParallelConfig, VllmConfig
 from vllm.distributed import stateless_destroy_torch_distributed_process_group
 from vllm.executor.multiproc_worker_utils import _add_prefix
@@ -111,6 +111,18 @@ class EngineCore:
         # Setup MM Input Mapper.
         self.mm_input_cache_server = MirroredProcessingCache(
             vllm_config.model_config)
+        
+        # dmoss: perf iter
+        self._perf_iter = 0
+        _perf_env_str = os.environ.get("VLLM_PROFILE_START_STOP", "None")
+        if '-' in _perf_env_str:
+            start, stop = _perf_env_str.strip().split('-')
+            self._start_perf_iter = int(start)
+            self._stop_perf_iter = int(stop)
+        else:
+            self._start_perf_iter = -1
+            self._stop_perf_iter = -1
+        logger.info(f"Profiler START-STOP: {self._start_perf_iter}-{self._stop_perf_iter}")
 
         # Setup batch queue for pipeline parallelism.
         # Batch queue for scheduled batches. This enables us to asynchronously
@@ -214,6 +226,16 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
+        # dmoss: perf start
+        if self._perf_iter == self._start_perf_iter:
+            logger.info(f"Starting profiler at {self._perf_iter}")
+            profiler.start()
+
+        if self._perf_iter == self._stop_perf_iter:
+            logger.info(f"Stopping profiler at {self._perf_iter}")
+            profiler.stop()
+
+        self._perf_iter += 1
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.

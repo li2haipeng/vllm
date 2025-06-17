@@ -4,7 +4,7 @@ export VLLM_MLA_DISABLE=1
 export VLLM_USE_V1=1
 
 python -m vllm.entrypoints.openai.api_server \
-    --model /home/ubuntu/models/Llama-4-Scout-17B-16E-Instruct-FP8-OS_routed \
+    --model /home/ubuntu/models/Llama-4-Maverick-17B-128E-Instruct-FP8 \
     --tensor-parallel-size 8 \
     --max-num-seqs 8 \
     --port 8088 \

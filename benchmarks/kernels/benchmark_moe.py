@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from itertools import product
 from types import SimpleNamespace
-from typing import Any, TypedDict
+from typing import Any, TypedDict, List
 
 import ray
 import torch
@@ -562,7 +562,7 @@ def main(args: argparse.Namespace):
     config = get_config(model=args.model, trust_remote_code=args.trust_remote_code)
     if args.model_prefix:
         config = getattr(config, args.model_prefix)
-    config = SimpleNamespace(**config)
+    # config = SimpleNamespace(**config)
 
     if config.architectures[0] == "DbrxForCausalLM":
         E = config.ffn_config.moe_num_experts
@@ -597,7 +597,7 @@ def main(args: argparse.Namespace):
     dtype = (
         torch.float16
         if current_platform.is_rocm()
-        else getattr(torch, config.torch_dtype)
+        else config.torch_dtype
     )
     use_fp8_w8a8 = args.dtype == "fp8_w8a8"
     use_int8_w8a16 = args.dtype == "int8_w8a16"
@@ -606,23 +606,23 @@ def main(args: argparse.Namespace):
     if args.batch_size is None:
         batch_sizes = [
             1,
-            2,
-            4,
-            8,
-            16,
-            24,
-            32,
-            48,
-            64,
-            96,
-            128,
-            256,
-            512,
-            1024,
-            1536,
-            2048,
-            3072,
-            4096,
+            # 2,
+            # 4,
+            # 8,
+            # 16,
+            # 24,
+            # 32,
+            # 48,
+            # 64,
+            # 96,
+            # 128,
+            # 256,
+            # 512,
+            # 1024,
+            # 1536,
+            # 2048,
+            # 3072,
+            # 4096,
         ]
     else:
         batch_sizes = [args.batch_size]
@@ -723,13 +723,13 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = FlexibleArgumentParser()
     parser.add_argument(
-        "--model", type=str, default="mistralai/Mixtral-8x7B-Instruct-v0.1"
+        "--model", type=str, default="/home/ubuntu/models/DSR1-layers"
     )
     parser.add_argument(
         "--tp-size", "-tp", "--tensor-parallel-size", type=int, default=2
     )
     parser.add_argument(
-        "--dtype", type=str, choices=["auto", "fp8_w8a8", "int8_w8a16"], default="auto"
+        "--dtype", type=str, choices=["auto", "fp8_w8a8", "int8_w8a16"], default="fp8_w8a8"
     )
     parser.add_argument("--use-deep-gemm", action="store_true")
     parser.add_argument("--seed", type=int, default=0)

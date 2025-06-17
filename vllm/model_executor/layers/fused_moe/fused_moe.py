@@ -1165,6 +1165,9 @@ def fused_experts(hidden_states: torch.Tensor,
     if (allow_deep_gemm and use_fp8_w8a8 and N > 512
             and _valid_deep_gemm(hidden_states, w1, w2, expert_map)):
         assert apply_router_weight_on_input is False
+        # logger.info(
+        #     "Using DeepGemm for fused experts with fp8_w8a8. "
+        # )
         return deep_gemm_moe_fp8(
             hidden_states=hidden_states,
             w1=w1,
