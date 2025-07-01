@@ -14,7 +14,7 @@ from vllm import LLM, SamplingParams
 from vllm.engine.arg_utils import EngineArgs
 # from vllm.profiler import layerwise_profile
 from vllm.utils import FlexibleArgumentParser
-os.environ['VLLM_USE_V1']='1'
+os.environ['VLLM_USE_V1']='0'
 BATCH_SIZE_DEFAULT = 1
 PROMPT_LEN_DEFAULT = 256
 VOCAB_SIZE_DEFAULT=129280

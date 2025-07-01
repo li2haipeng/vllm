@@ -606,23 +606,23 @@ def main(args: argparse.Namespace):
     if args.batch_size is None:
         batch_sizes = [
             1,
-            # 2,
-            # 4,
-            # 8,
-            # 16,
-            # 24,
-            # 32,
-            # 48,
-            # 64,
-            # 96,
-            # 128,
-            # 256,
-            # 512,
-            # 1024,
-            # 1536,
-            # 2048,
-            # 3072,
-            # 4096,
+            2,
+            4,
+            8,
+            16,
+            24,
+            32,
+            48,
+            64,
+            96,
+            128,
+            256,
+            512,
+            1024,
+            1536,
+            2048,
+            3072,
+            4096,
         ]
     else:
         batch_sizes = [args.batch_size]
@@ -723,10 +723,10 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = FlexibleArgumentParser()
     parser.add_argument(
-        "--model", type=str, default="/home/ubuntu/models/DSR1-layers"
+        "--model", type=str, default="/home/ubuntu/models/Llama-4-Scout-17B-16E-Instruct"
     )
     parser.add_argument(
-        "--tp-size", "-tp", "--tensor-parallel-size", type=int, default=2
+        "--tp-size", "-tp", "--tensor-parallel-size", type=int, default=8
     )
     parser.add_argument(
         "--dtype", type=str, choices=["auto", "fp8_w8a8", "int8_w8a16"], default="fp8_w8a8"

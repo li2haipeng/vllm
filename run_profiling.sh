@@ -1,7 +1,8 @@
 BS=1
 PROMPT_LEN=1600
-TENSORBORD_DIR=/home/ubuntu/vllm/vllm_profile_v090
+TENSORBORD_DIR=/home/ubuntu/vllm/vllm_profile_v0
 MODEL_PATH=/home/ubuntu/models
+export VLLM_USE_V1=0
 # export VLLM_USE_DEEP_GEMM=1
 for MODEL in Llama-4-Maverick-17B-128E-Instruct-FP8
 do

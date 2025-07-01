@@ -11,7 +11,8 @@ from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Deque, Dict,
                     Iterable, List, Literal, Mapping, NamedTuple, Optional)
 from typing import Sequence as GenericSequence
 from typing import Set, Type, Union, cast, overload
-
+import torch.cuda.profiler as profiler
+import os
 import torch
 from typing_extensions import TypeVar, deprecated
 
@@ -401,6 +402,18 @@ class LLMEngine:
 
         # Don't keep the dummy data in memory
         self.reset_mm_cache()
+
+        # dmoss: perf iter
+        self._perf_iter = 0
+        _perf_env_str = os.environ.get("VLLM_PROFILE_START_STOP", "None")
+        if '-' in _perf_env_str:
+            start, stop = _perf_env_str.strip().split('-')
+            self._start_perf_iter = int(start)
+            self._stop_perf_iter = int(stop)
+        else:
+            self._start_perf_iter = -1
+            self._stop_perf_iter = -1
+        logger.info(f"Profiler START-STOP: {self._start_perf_iter}-{self._stop_perf_iter}")
 
     def _initialize_kv_caches(self) -> None:
         """Initialize the KV cache in the worker(s).
@@ -1302,6 +1315,16 @@ class LLMEngine:
                 break
         ```
         """
+        if self._perf_iter == self._start_perf_iter:
+            logger.info(f"Starting profiler at {self._perf_iter}")
+            profiler.start()
+
+        if self._perf_iter == self._stop_perf_iter:
+            logger.info(f"Stopping profiler at {self._perf_iter}")
+            profiler.stop()
+
+        self._perf_iter += 1
+        
         if self.parallel_config.pipeline_parallel_size > 1:
             raise NotImplementedError(
                 "Pipeline parallelism is only supported through AsyncLLMEngine "

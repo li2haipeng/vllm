@@ -1,5 +1,5 @@
-export VLLM_PROFILE_START_STOP="30-35"
-
+export VLLM_PROFILE_START_STOP="70-71"
+export VLLM_USE_V1=0
 nsys profile \
   -t nvtx,cuda \
   --cudabacktrace=all \
@@ -8,11 +8,11 @@ nsys profile \
   --capture-range cudaProfilerApi \
   --capture-range-end=stop \
   --trace-fork-before-exec=true \
-  -o logs/nsys_$(date +%Y%m%d_%H%M%S).nsys-rep \
+  -o logs/dsr1_bs_1_70-71_v0.nsys-rep \
     python benchmarks/benchmark_throughput.py \
     --backend vllm \
     --async-engine \
-    --model /home/ubuntu/models/Llama-4-Maverick-17B-128E-Instruct-FP8 \
+    --model /home/ubuntu/models/DSR1 \
     --num-prompts 1 \
     --input-len 1600 \
     --output-len 600 \
