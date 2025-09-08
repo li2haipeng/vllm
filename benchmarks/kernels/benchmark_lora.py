@@ -511,6 +511,7 @@ class BenchmarkTensors:
             "num_tokens_per_lora": self.lora_kernel_meta.num_tokens_per_lora,
             "lora_token_start_loc": self.lora_kernel_meta.lora_token_start_loc,
             "lora_ids": self.lora_kernel_meta.active_lora_ids,
+            "no_lora_flag_cpu": self.lora_kernel_meta.no_lora_flag_cpu,
             "scaling": 1.0,
         }
 
@@ -550,6 +551,7 @@ class BenchmarkTensors:
             "num_tokens_per_lora": self.lora_kernel_meta.num_tokens_per_lora,
             "lora_token_start_loc": self.lora_kernel_meta.lora_token_start_loc,
             "lora_ids": self.lora_kernel_meta.active_lora_ids,
+            "no_lora_flag_cpu": self.lora_kernel_meta.no_lora_flag_cpu,
             "offset_start": 0,
             "add_inputs": add_inputs,
         }

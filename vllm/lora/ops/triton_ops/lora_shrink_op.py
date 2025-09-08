@@ -178,8 +178,8 @@ def _lora_shrink(
     BLOCK_K = kernel_config['block_k']
     SPLIT_K = kernel_config['split_k']
     NUM_WARPS = kernel_config['num_warps']
-    NUM_CTAS = kernel_config['num_ctas']
-    NUM_STAGES = kernel_config['max_nreg']
+    # NUM_CTAS = kernel_config['num_ctas']
+    NUM_STAGES = kernel_config['num_stages']
 
     EVEN_K = K % (BLOCK_K * SPLIT_K) == 0  # type: ignore
 
@@ -222,7 +222,6 @@ def _lora_shrink(
         SPLIT_K,
         NUM_SLICES,
         num_warps=NUM_WARPS,
-        num_ctas=NUM_CTAS,
         num_stages=NUM_STAGES,
     )
 

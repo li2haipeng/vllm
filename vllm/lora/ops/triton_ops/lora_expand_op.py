@@ -214,8 +214,8 @@ def _lora_expand(
     BLOCK_N = kernel_config['block_n']
     BLOCK_K = kernel_config['block_k']
     NUM_WARPS = kernel_config['num_warps']
-    NUM_CTAS = kernel_config['num_ctas']
-    NUM_STAGES = kernel_config['max_nreg']
+    # NUM_CTAS = kernel_config['num_ctas']
+    NUM_STAGES = kernel_config['num_stages']
 
     EVEN_K = K % BLOCK_K == 0  # type: ignore
 
@@ -267,7 +267,6 @@ def _lora_expand(
         NUM_SLICES,
         same_stride,
         num_warps=NUM_WARPS,
-        num_ctas=NUM_CTAS,
         num_stages=NUM_STAGES,
     )
 

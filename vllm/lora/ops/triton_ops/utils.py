@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+from vllm.logger import init_logger
+logger = init_logger(__name__)
 
 _LORA_A_PTR_DICT: dict[tuple[int, ...], tuple[torch.tensor, ...]] = {}
 _LORA_B_PTR_DICT: dict[tuple[int, ...], tuple[torch.tensor, ...]] = {}
@@ -153,9 +155,11 @@ def load_v1_op_config(op_type: str,
         f'{os.path.dirname(os.path.realpath(__file__))}/configs/{config_fname}'
     )
     if not config_path.exists():
+        logger.warning_once(f"Didn't find config path {config_path}")
         return None
 
     # Load json
+    logger.warning_once(f"Using LoRA configs from {config_path}.")
     config_data = None
     with open(str(config_path)) as f:
         config_data = json.load(f)
@@ -204,6 +208,7 @@ def get_v1_op_configs(
     config_data: Any
     config_data = load_v1_op_config(op_type, add_inputs)
     if not config_data:
+        logger.warning_once("Using default configs for LoRA.")
         return default
 
     # config is structured as config_data[max_loras][num_slices][m][k][n] = {}
