@@ -1,7 +1,8 @@
-export LORA_PATH=/home/ubuntu/models/loras/qsq
-vllm serve /home/ubuntu/models/Llama-3.3-70B-Instruct-FP8-dynamic-mlp-only \
+export LORA_PATH=/home/ubuntu/models/loras/gpt-oss-120b-hallu-miti
+vllm serve /home/ubuntu/models/gpt-oss-120b \
     --trust-remote-code \
     -tp 8 \
+    --port 8080 \
     --enable-lora \
     --max-loras 16 \
     --lora-modules  \
@@ -21,8 +22,8 @@ vllm serve /home/ubuntu/models/Llama-3.3-70B-Instruct-FP8-dynamic-mlp-only \
         adapter13=$LORA_PATH \
         adapter14=$LORA_PATH \
         adapter15=$LORA_PATH \
-    --max-lora-rank 32
-
+    --max-lora-rank 32 \
+    --enforce-eager
 # export VLLM_ATTENTION_BACKEND="FLASH_ATTN"
 # export VLLM_FLASH_ATTN_VERSION=3
 # export VLLM_MLA_DISABLE=1

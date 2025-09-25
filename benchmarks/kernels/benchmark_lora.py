@@ -21,7 +21,7 @@ from weight_shapes import WEIGHT_SHAPES
 from vllm.triton_utils import HAS_TRITON
 
 if HAS_TRITON:
-    from vllm.lora.ops.triton_ops import LoRAKernelMeta, lora_expand, lora_shrink
+    from vllm.lora.ops.triton_ops import LoRAKernelMeta, lora_expand, lora_shrink, lora_shrink_expand
     from vllm.lora.ops.triton_ops.utils import _LORA_A_PTR_DICT, _LORA_B_PTR_DICT
 
 from vllm.utils import FlexibleArgumentParser
@@ -98,6 +98,53 @@ def make_rand_tensors(
 
     C = torch.zeros(c_shape, dtype=c_dtype).to(device)
     return A, Bs, C
+
+def make_rand_tensors_fused(
+    x_shape: tuple[int],
+    a_shape: tuple[int],
+    b_shape: tuple[int],
+    buffer_shape: tuple[int],
+    c_shape: tuple[int],
+    x_dtype: torch.dtype,
+    a_dtype: torch.dtype,
+    b_dtype: torch.dtype,
+    buffer_dtype: torch.dtype,
+    c_dtype: torch.dtype,
+    num_slices: int,
+    device: str = "cuda",
+) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]:
+    """
+    Make LoRA input/output matrices.
+    """
+    x = torch.rand(x_shape, dtype=x_dtype).to(device)
+    # x = torch.ones(x_shape, dtype=x_dtype).to(device)
+    # for i in range(x_shape[0]):
+    #     x[i,:] *= ((i+1)/100)
+
+    # LoRA weights column major
+    As = [torch.rand(a_shape, dtype=a_dtype).to(device) for _ in range(num_slices)]
+    # As = []
+    # w = 1
+    # for i in range(num_slices):
+    #     a = torch.ones(a_shape, dtype=a_dtype).to(device)
+    #     for j in range(a_shape[0]):
+    #         a[j, :, :] *= (w * 0.01)
+    #         w += 1
+    #     As.append(a)
+
+    Bs = [torch.rand(b_shape, dtype=b_dtype).to(device) for _ in range(num_slices)]
+    # Bs = []
+    # w = 1
+    # for i in range(num_slices):
+    #     b = torch.ones(b_shape, dtype=b_dtype).to(device)
+    #     for j in range(b_shape[0]):
+    #         b[j, :, :] *= (w * 0.01)
+    #         w += 1
+    #     Bs.append(b)
+
+    buffer = torch.zeros(buffer_shape, dtype=buffer_dtype).to(device)
+    y = torch.zeros(c_shape, dtype=c_dtype).to(device)
+    return x, As, Bs, buffer, y
 
 
 def make_prompt_lora_mapping(
@@ -190,6 +237,7 @@ class OpType(Enum):
 
     LORA_SHRINK = auto()
     LORA_EXPAND = auto()
+    LORA_SHRINK_EXPAND = auto()
 
     @staticmethod
     def from_str(s: str) -> "OpType":
@@ -197,6 +245,8 @@ class OpType(Enum):
             return OpType.LORA_SHRINK
         if s.lower() == "lora_expand":
             return OpType.LORA_EXPAND
+        if s.lower() == "lora_shrink_expand":
+            return OpType.LORA_SHRINK_EXPAND
         raise ValueError(f"Unrecognized str {s} to convert to OpType")
 
     def is_shrink_fn(self) -> bool:
@@ -205,6 +255,9 @@ class OpType(Enum):
     def is_expand_fn(self) -> bool:
         return self in [OpType.LORA_EXPAND]
 
+    def is_fused_fn(self) -> bool:
+        return self in [OpType.LORA_SHRINK_EXPAND]
+    
     def num_slices(self) -> list[int]:
         return [1, 2, 3]
 
@@ -212,7 +265,7 @@ class OpType(Enum):
         self, batch_size: int, seq_length: int, hidden_size: int, lora_rank: int
     ) -> tuple[int, int, int]:
         num_tokens = batch_size * seq_length
-        if self.is_shrink_fn():
+        if self.is_shrink_fn() or self.is_fused_fn():
             m = num_tokens
             k = hidden_size
             n = lora_rank
@@ -231,9 +284,11 @@ class OpType(Enum):
         """
         if self.is_shrink_fn():
             return op_dtype, op_dtype, torch.float32
-        else:
-            assert self.is_expand_fn()
+        elif self.is_expand_fn():
             return torch.float32, op_dtype, op_dtype
+        else:
+            assert self.is_fused_fn()
+            return op_dtype, op_dtype, op_dtype, torch.float32, op_dtype
 
     def matmul_shapes(
         self,
@@ -257,6 +312,11 @@ class OpType(Enum):
         if self in [OpType.LORA_EXPAND]:
             # LoRA expand kernels support num_slices inherently in the kernel
             return ((num_slices, m, k), b_shape, (m, n * num_slices))
+        if self in [OpType.LORA_SHRINK_EXPAND]: # n is rank here
+            a_shape = (num_loras, n, k)
+            b_shape = (num_loras, k, n)
+            buffer_shape = (num_slices, m, n)
+            return ((m, k), a_shape, b_shape, buffer_shape, (m, k * num_slices))
         raise ValueError(f"Unrecognized op_type {self}")
 
     def bench_fn(self) -> Callable:
@@ -264,6 +324,8 @@ class OpType(Enum):
             return lora_shrink
         if self == OpType.LORA_EXPAND:
             return lora_expand
+        if self == OpType.LORA_SHRINK_EXPAND:
+            return lora_shrink_expand
 
         raise ValueError(f"Unrecognized optype {self}")
 
@@ -358,6 +420,7 @@ class BenchmarkTensors:
     # matmul tensors
     input: torch.Tensor
     lora_weights_lst: list[torch.Tensor]
+    lora_b_weights_lst: Optional[list[torch.Tensor]]
     output: torch.Tensor
     # LoRA kernel metadata
     lora_kernel_meta: LoRAKernelMeta
@@ -377,18 +440,33 @@ class BenchmarkTensors:
         ctx: BenchmarkContext, op_type: OpType, device: str = "cuda"
     ) -> "BenchmarkTensors":
         # Make input / output matmul tensors.
-        a_shape, b_shape, c_shape = op_type.matmul_shapes(
-            ctx.batch_size,
-            ctx.seq_length,
-            ctx.hidden_size,
-            ctx.lora_rank,
-            ctx.num_loras,
-            ctx.num_slices,
-        )
-        a_type, b_type, c_type = op_type.matmul_dtypes(ctx.dtype)
-        input_tensor, lora_weights, output_tensor = make_rand_tensors(
-            a_shape, b_shape, c_shape, a_type, b_type, c_type, num_slices=ctx.num_slices
-        )
+        if not op_type.is_fused_fn():
+            a_shape, b_shape, c_shape = op_type.matmul_shapes(
+                ctx.batch_size,
+                ctx.seq_length,
+                ctx.hidden_size,
+                ctx.lora_rank,
+                ctx.num_loras,
+                ctx.num_slices,
+            )
+            a_type, b_type, c_type = op_type.matmul_dtypes(ctx.dtype)
+            input_tensor, lora_weights, output_tensor = make_rand_tensors(
+                a_shape, b_shape, c_shape, a_type, b_type, c_type, num_slices=ctx.num_slices
+            )
+        else:
+            x_shape, a_shape, b_shape, buffer_shape, c_shape = op_type.matmul_shapes(
+                ctx.batch_size,
+                ctx.seq_length,
+                ctx.hidden_size,
+                ctx.lora_rank,
+                ctx.num_loras,
+                ctx.num_slices,
+            )
+            x_dtype, a_dtype, b_dtype, buffer_dtype, c_dtype = op_type.matmul_dtypes(ctx.dtype)
+            input_tensor, lora_a_weights, lora_b_weights, _, output_tensor =\
+                  make_rand_tensors_fused(x_shape, a_shape, b_shape, buffer_shape, c_shape, 
+                                          x_dtype, a_dtype, b_dtype, buffer_dtype, c_dtype, 
+                                          num_slices=ctx.num_slices)
 
         # Make metadata tensors.
         # Keep the metadata tensors in the CPU for further processing if needed.
@@ -421,15 +499,27 @@ class BenchmarkTensors:
             device="cpu",
         )
         lora_kernel_meta.prepare_tensors(token_lora_mapping=token_lora_indices_tensor)
-
-        return BenchmarkTensors(
-            input_tensor,
-            lora_weights,
-            output_tensor,
-            lora_kernel_meta,
-            seq_len_tensor,
-            prompt_lora_indices_tensor,
-        )
+        if not op_type.is_fused_fn():
+            return BenchmarkTensors(
+                input=input_tensor,
+                lora_weights_lst=lora_weights,
+                lora_b_weights_lst=None,
+                output=output_tensor,
+                lora_kernel_meta=lora_kernel_meta,
+                seq_lens=seq_len_tensor,
+                prompt_lora_mapping=prompt_lora_indices_tensor,
+            )
+        else:
+            assert op_type.is_fused_fn()
+            return BenchmarkTensors(
+                input_tensor,
+                lora_a_weights,
+                lora_b_weights,
+                output_tensor,
+                lora_kernel_meta,
+                seq_len_tensor,
+                prompt_lora_indices_tensor,
+            )
 
     def sanity_check(self) -> None:
         """
@@ -464,7 +554,11 @@ class BenchmarkTensors:
         for field_name in LoRAKernelMeta.__dataclass_fields__:
             field = getattr(self.lora_kernel_meta, field_name)
             assert isinstance(field, torch.Tensor)
-            setattr(self.lora_kernel_meta, field_name, to_device(field))
+            setattr(
+                self.lora_kernel_meta,
+                field_name,
+                to_device(field) if field_name != "no_lora_flag_cpu" else field,
+            )
 
     def metadata(self) -> tuple[int, int, int]:
         """
@@ -555,6 +649,54 @@ class BenchmarkTensors:
             "offset_start": 0,
             "add_inputs": add_inputs,
         }
+    
+    def as_fused_lora_kwargs(self, add_inputs: bool) -> dict[str, Any]:
+        self.sanity_check()
+        self.to_device(self.input.device)
+
+        _, num_tokens, _, num_slices = self.metadata()
+
+        # Sanity check matrix shapes.
+        x_shape, a_shape, b_shape, o_shape = (
+            self.input.shape,
+            self.lora_weights_lst[0].shape,
+            self.lora_b_weights_lst[0].shape,
+            self.output.shape,
+        )
+        # Expected input shape : [num_tokens, hidden_size]
+        assert len(x_shape) == 2
+        assert x_shape[0] == num_tokens
+        hidden_size = x_shape[1]
+        # Expected lora A weight shape : [num_loras, lora_rank, hidden_size]
+        assert len(a_shape) == 3
+        assert a_shape[2] == hidden_size
+        lora_rank = a_shape[1]
+        # Expected lora B weight shape : [num_loras, hidden_size, lora_rank]
+        assert len(b_shape) == 3
+        assert b_shape[2] == lora_rank, f"{b_shape}, {lora_rank}"
+        assert b_shape[1] == hidden_size
+
+        # Expected output shape : [num_tokens, hidden_size * num_slices]
+        assert len(o_shape) == 2
+        assert o_shape == (num_tokens, hidden_size * num_slices), f"{num_tokens}, {hidden_size * num_slices}"
+
+        return {
+            "inputs": self.input,
+            "lora_a_weights": self.lora_weights_lst,
+            "lora_b_weights": self.lora_b_weights_lst,
+            "output_tensor": self.output,
+            "token_lora_mapping": self.lora_kernel_meta.token_lora_mapping,
+            "token_indices_sorted_by_lora_ids": (
+                self.lora_kernel_meta.token_indices_sorted_by_lora_ids
+            ),
+            "num_tokens_per_lora": self.lora_kernel_meta.num_tokens_per_lora,
+            "lora_token_start_loc": self.lora_kernel_meta.lora_token_start_loc,
+            "lora_ids": self.lora_kernel_meta.active_lora_ids,
+            "scaling": 1.0,
+            "no_lora_flag_cpu": self.lora_kernel_meta.no_lora_flag_cpu,
+            "offset_start": 0,
+            "add_inputs": add_inputs,
+        }
 
     def bench_fn_kwargs(
         self, op_type: OpType, add_inputs: Optional[bool] = None
@@ -568,6 +710,8 @@ class BenchmarkTensors:
             return self.as_lora_shrink_kwargs()
         if op_type == OpType.LORA_EXPAND:
             return self.as_lora_expand_kwargs(add_inputs)
+        if op_type == OpType.LORA_SHRINK_EXPAND:
+            return self.as_fused_lora_kwargs(add_inputs)
         raise ValueError(f"Unrecognized optype {self}")
 
     def test_correctness(

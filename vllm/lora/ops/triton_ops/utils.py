@@ -146,7 +146,7 @@ def load_v1_op_config(op_type: str,
     if op_type == "shrink":
         config_fname = f"{gpu_name}_{op_type.upper()}.json"
     else:
-        assert op_type == "expand"
+        assert op_type == "expand" or op_type == "fused"
         config_fname = (f"{gpu_name}_"
                         f"{op_type.upper()}_"
                         f"{str(add_inputs).upper()}.json")
@@ -176,7 +176,7 @@ def get_v1_op_configs(
         num_slices: int,
         add_inputs: Optional[bool] = None) -> dict[str, Optional[int]]:
 
-    assert op_type in ["shrink", "expand"]
+    assert op_type in ["shrink", "expand", "fused"]
 
     # default config
     default = {}
@@ -191,7 +191,7 @@ def get_v1_op_configs(
             'num_stages': 2,
             'max_nreg': None
         }
-    else:
+    elif op_type == "expand":
         default = {
             'block_m': 64,
             'block_n': 128,
@@ -201,9 +201,21 @@ def get_v1_op_configs(
             'num_stages': 2,
             'max_nreg': None
         }
+    else:
+        default = {
+            'block_m': 64,
+            'block_n': 128,
+            'block_k': 16,
+            'block_r': 16,
+            'num_warps': 4,
+            'num_ctas': 1,
+            'num_stages': 2,
+        }
+
+
     m = batch
 
-    k, n = (hidden_size, rank) if op_type == "shrink" else (rank, hidden_size)
+    k, n = (hidden_size, rank) if op_type == "shrink" or "fused" else (rank, hidden_size)
 
     config_data: Any
     config_data = load_v1_op_config(op_type, add_inputs)

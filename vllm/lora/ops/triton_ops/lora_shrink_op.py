@@ -158,7 +158,8 @@ def _lora_shrink(
     N, K = lora_a_weights[0].shape[-2:]  # K=hidden_size,N=rank
     NUM_SLICES = len(lora_a_weights)
     MAX_LORAS = lora_ids.size(0)
-
+    with open("120b_lora_shrink_shape.txt", "a") as f:
+        f.write(f"LoRA Shrink Op: M={M}, N={N}, K={K}, num_slices={NUM_SLICES}, max_loras={MAX_LORAS}\n")
     # Triton kernel configs
     # BLOCK_M = 32
     # BLOCK_N = 16
