@@ -203,13 +203,13 @@ def get_v1_op_configs(
         }
     else:
         default = {
-            'block_m': 64,
-            'block_n': 128,
-            'block_k': 16,
-            'block_r': 16,
-            'num_warps': 4,
+            'block_m': 16,
+            'block_n': 256,
+            'block_k': 256,
+            'block_r': 256,
+            'num_warps': 8,
             'num_ctas': 1,
-            'num_stages': 2,
+            'num_stages': 5,
         }
 
 

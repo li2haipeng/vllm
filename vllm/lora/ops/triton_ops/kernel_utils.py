@@ -245,7 +245,6 @@ def do_shrink_kernel(
 
 @triton.jit
 def do_shrink_expand_kernel(
-    pid_n,
     lora_id,
     slice_id,
     input_ptr,
@@ -279,7 +278,6 @@ def do_shrink_expand_kernel(
     SAME_STRIDE: tl.constexpr,
     SLICE_NUM: tl.constexpr,
     EVEN_K: tl.constexpr,
-    EVEN_R: tl.constexpr,
     ADD_INPUTS: tl.constexpr
 ):
     """
@@ -310,18 +308,9 @@ def do_shrink_expand_kernel(
         # Get slice offset for output indexing
         slice_offset = tl.load(slice_start_loc + slice_id)
     
-
-    offset_n = tl.arange(0, BLOCK_N) + pid_n * BLOCK_N
-    rbn = tl.max_contiguous(tl.multiple_of(offset_n % curr_N, BLOCK_N), BLOCK_N)
-    
-    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float16)
-    
     offset_m = tl.arange(0, BLOCK_M)
     #TODO(@haipenl): currently only support Rs are the same for all LoRAs
-    # for r_start in range(0, R, BLOCK_R):
-        # if r_start < R:
     offset_r = tl.arange(0, BLOCK_R)
-    # r_mask = offset_r < R
     
     # Step 1: Compute U = X @ A (shrink operation)
     u_acc = tl.zeros((BLOCK_M, BLOCK_R), dtype=tl.float16)
@@ -338,7 +327,7 @@ def do_shrink_expand_kernel(
         a_ptr = (cur_lora_a_ptr + lora_id * ls_a_d0_ptr +
                     offset_k[:, None] * ls_a_d2_ptr +
                     offset_r[None, :] * ls_a_d1_ptr)
-        if EVEN_K and EVEN_R:
+        if EVEN_K:
             x_block = tl.load(x_ptr)
             a_block = tl.load(a_ptr)
         else:
@@ -351,33 +340,26 @@ def do_shrink_expand_kernel(
         
         u_acc += tl.dot(x_block, a_block, out_dtype=tl.float16)
 
-    # u_acc = u_acc.to(tl.float16)
-    
-    # Step 2: Compute Y = U @ B (expand operation)
-    b_ptr = (cur_lora_b_ptr + lora_id * cur_lora_b_d0_stride +
-                offset_r[:, None] * cur_lora_b_d2_stride +
-                rbn[None, :] * cur_lora_b_d1_stride)
-    if EVEN_R:
-        b_block = tl.load(b_ptr)
-    else:
-        # b_mask = r_mask[:, None] & (offset_n[None, :] < curr_N)  
-        b_mask = offset_n[None, :] < curr_N
-        b_block = tl.load(b_ptr, mask=b_mask, other=0.0)
-    
-    # u_masked = tl.where(r_mask[None, :], u_acc, 0.0)
-    accumulator += tl.dot(u_acc, b_block, out_dtype=tl.float16)
-    
-    offset_cn = tl.arange(0, BLOCK_N) + pid_n * BLOCK_N + slice_offset
-    c_ptr = output_ptr + ram[:, None] * output_d0_stride + offset_cn[None, :] * output_d1_stride
-    c_mask = (offset_m[:, None] < cta_m_len) & (offset_cn[None, :] < (curr_N + slice_offset))
-    
-    if ADD_INPUTS:
-        existing = tl.load(c_ptr, mask=c_mask, other=0.0)
-        accumulator = accumulator + existing
+    # stpe 2: for-loop N tiles. Compute Y = U @ B (expand operation)
+    num_n_tiles = tl.cdiv(curr_N, BLOCK_N)
+    offset_n = tl.arange(0, BLOCK_N)
+    for n_tile in range(0, num_n_tiles):
+        n_start = n_tile * BLOCK_N
+        n_mask = (n_start + offset_n) < curr_N
 
-    # # Apply final casting if needed
-    # if CAST_TYPE:
-    # accumulator = accumulator.to(tl.float16)
-    
-    # Store the result
-    tl.store(c_ptr, accumulator, mask=c_mask)
+        # load B chunk: shape (BLOCK_R, BLOCK_N)
+        b_ptrs = cur_lora_b_ptr + lora_id * cur_lora_b_d0_stride + offset_r[:, None] * cur_lora_b_d2_stride + (n_start + offset_n[None, :]) * cur_lora_b_d1_stride
+        b_mask = n_mask[None, :]
+        B_chunk = tl.load(b_ptrs, mask=b_mask, other=0.0)
+
+        Y_chunk = tl.dot(u_acc, B_chunk)
+
+        out_ptrs = output_ptr + ram[:, None] * output_d0_stride + (slice_offset + n_start + offset_n[None, :]) * output_d1_stride
+        out_mask = (offset_m[:, None] < cta_m_len) & (n_mask[None, :])
+
+        if ADD_INPUTS:
+            existing = tl.load(out_ptrs, mask=out_mask, other=0.0)
+            Y_chunk += existing
+
+        tl.store(out_ptrs, Y_chunk, mask=out_mask)
+

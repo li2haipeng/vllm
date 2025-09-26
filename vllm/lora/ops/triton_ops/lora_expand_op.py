@@ -195,8 +195,8 @@ def _lora_expand(
     MAX_LORAS = lora_ids.size(0)
     CAST_TYPE = False
     NUM_SLICES = len(lora_b_weights)
-    with open("120b_lora_expand_shape.txt", "a") as f:
-        f.write(f"LoRA Expand Op: M={M}, N={MAX_N}, K={K}, num_slices={NUM_SLICES}, max_loras={MAX_LORAS}\n")
+    # with open("120b_lora_expand_shape.txt", "a") as f:
+    #     f.write(f"LoRA Expand Op: M={M}, N={MAX_N}, K={K}, num_slices={NUM_SLICES}, max_loras={MAX_LORAS}\n")
     # # Triton kernel configs.
     # BLOCK_M = 64
     # BLOCK_N = 128
