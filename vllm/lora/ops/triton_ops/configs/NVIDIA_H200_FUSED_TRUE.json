@@ -1,0 +1,325 @@
+{
+    "16": {
+        "1": {
+            "1": {
+                "1024": {
+                    "2880": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    },
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 64,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    },
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                },
+                "3584": {
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                }
+            },
+            "8": {
+                "1024": {
+                    "2880": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    },
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 128,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    },
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                },
+                "3584": {
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                }
+            },
+            "16": {
+                "1024": {
+                    "2880": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    },
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 128,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    },
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                },
+                "3584": {
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                }
+            },
+            "2": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    }
+                }
+            },
+            "4": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            },
+            "1024": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 64,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            },
+            "1536": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 32,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            },
+            "8192": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 32,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            },
+            "10240": {
+                "1024": {
+                    "8192": {
+                        "16": {
+                            "block_m": 32,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            }
+        },
+        "3": {
+            "1": {
+                "2880": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 64,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                },
+                "8192": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 128,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    }
+                }
+            },
+            "8": {
+                "2880": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                },
+                "8192": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    }
+                }
+            },
+            "16": {
+                "2880": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 128,
+                            "num_warps": 4,
+                            "num_stages": 3
+                        }
+                    }
+                },
+                "8192": {
+                    "1024": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            }
+        },
+        "2": {
+            "1": {
+                "8192": {
+                    "3584": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    }
+                }
+            },
+            "8": {
+                "8192": {
+                    "3584": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 256,
+                            "num_warps": 4,
+                            "num_stages": 5
+                        }
+                    }
+                }
+            },
+            "16": {
+                "8192": {
+                    "3584": {
+                        "16": {
+                            "block_m": 16,
+                            "block_n": 256,
+                            "block_k": 64,
+                            "num_warps": 4,
+                            "num_stages": 4
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

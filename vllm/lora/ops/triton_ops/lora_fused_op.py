@@ -22,9 +22,10 @@ def _lora_fused_kernel(
     lora_a_ptr,
     lora_b_ptr,
     output_ptr,
+    M,
     N,
-    R,
     K,
+    R: tl.constexpr,
     token_indices_sorted_by_lora_ids,
     num_tokens_per_lora,
     lora_token_start_loc,
@@ -44,13 +45,18 @@ def _lora_fused_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
-    BLOCK_R: tl.constexpr,
     EVEN_K: tl.constexpr,
     ADD_INPUTS: tl.constexpr,
     SLICE_NUM: tl.constexpr,
     SAME_STRIDE: tl.constexpr,
+
 ):
-    pid_m = tl.program_id(axis=0)
+    cta_m_num = tl.cdiv(M, BLOCK_M)
+    cta_n_num = tl.cdiv(N, BLOCK_N)
+
+    pid_mn = tl.program_id(axis=0)
+    pid_m = pid_mn % cta_m_num
+    pid_n = (pid_mn // cta_m_num) % cta_n_num
     slice_id = tl.program_id(axis=1)
     lora_idx = tl.program_id(axis=2)
 
@@ -70,6 +76,9 @@ def _lora_fused_kernel(
     # cur_n=tl.load(output_hs_ptr + slice_id), this situation exists in GQA's
     # qkv linear.
     curr_N = N if SAME_STRIDE else tl.load(output_hs_ptr + slice_id)
+    if pid_n * BLOCK_N >= curr_N:
+        # Early exit CTA.
+        return
 
     # num rows this CTA should process.
     cta_m_len = min(BLOCK_M, lora_m_size - cta_m_offset)
@@ -85,6 +94,7 @@ def _lora_fused_kernel(
     ram = tl.load(cta_lora_seq_indices + offset_m)
 
     do_shrink_expand_kernel(
+        pid_n,
         lora_id,
         slice_id,
         input_ptr,
@@ -92,8 +102,8 @@ def _lora_fused_kernel(
         lora_b_ptr,
         output_ptr,
         curr_N,
-        R,
         K,
+        R,
         cta_m_len,
         ram,  # array identifying the rows of Input ptr to operate on
         slice_start_loc,
@@ -114,7 +124,6 @@ def _lora_fused_kernel(
         BLOCK_M,
         BLOCK_N,
         BLOCK_K,
-        BLOCK_R,
         SAME_STRIDE,
         SLICE_NUM,
         EVEN_K,
@@ -133,11 +142,17 @@ def _lora_shrink_expand(
     num_tokens_per_lora: torch.Tensor,  # shape [max-loras + 1]
     lora_token_start_loc: torch.Tensor,  # shape [max-loras + 2]
     lora_ids: torch.Tensor,  # shape [max-loras + 1]
-    scaling: float,
     no_lora_flag_cpu: torch.Tensor,  # shape [1] 
+    scaling: float,
     offset_start: int = 0,
     add_inputs: bool = False,
 ) -> None:
+    
+    assert no_lora_flag_cpu.numel() == 1
+    if no_lora_flag_cpu.item():
+        # None of the inputs require LoRA.
+        return
+    
     assert inputs.dtype == lora_a_weights[0].dtype
     assert inputs.dtype in [torch.float16, torch.bfloat16]
     for weight in lora_a_weights:
@@ -170,30 +185,29 @@ def _lora_shrink_expand(
     N, K = lora_a_weights[0].shape[-2:]  # K=hidden_size,N=rank
     NUM_SLICES = len(lora_a_weights)
     MAX_LORAS = lora_ids.size(0)
-
+    out_dim = lora_a_weights[0].shape[1]
     kernel_config = get_v1_op_configs(op_type="fused",
                                     max_loras=MAX_LORAS,
                                     batch=M,
                                     hidden_size=K,
                                     rank=N,
                                     num_slices=NUM_SLICES,
+                                    out_dim = out_dim,
                                     add_inputs=add_inputs)
 
     BLOCK_M = kernel_config['block_m']
     BLOCK_N = kernel_config['block_n']
     BLOCK_K = kernel_config['block_k']
-    BLOCK_R = kernel_config['block_r']
     NUM_WARPS = kernel_config['num_warps']
     NUM_STAGES = kernel_config['num_stages']
 
     EVEN_K = K % BLOCK_K == 0  # type: ignore
-    EVEN_R = R % BLOCK_K == 0  # type: ignore
 
     # TODO (varun): This grid formulation maximizes parallelization at the
     # cost of wasteful thread block launch when only a few input tokens require
     # LoRA. This might not be the best in all cases.
     grid = (
-        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(M, BLOCK_M) * triton.cdiv(MAX_N, BLOCK_N),
         NUM_SLICES,
         # Each LoRA receives its own set of thread blocks for output
         # computation. If some LoRA doesn't have any tokens to process, its
@@ -206,9 +220,10 @@ def _lora_shrink_expand(
         lora_a_ptr_tensor,
         lora_b_ptr_tensor,
         output_tensor,
+        M,
         MAX_N,
-        R,
         K,
+        R,
         token_indices_sorted_by_lora_ids,
         num_tokens_per_lora,
         lora_token_start_loc,
@@ -228,7 +243,6 @@ def _lora_shrink_expand(
         BLOCK_M,
         BLOCK_N,
         BLOCK_K,
-        BLOCK_R,
         EVEN_K,
         ADD_INPUTS,
         NUM_SLICES,

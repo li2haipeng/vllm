@@ -1,0 +1,298 @@
+{
+    "16": {
+        "1": {
+            "1": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                }
+            },
+            "8": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                }
+            },
+            "16": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 128,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                }
+            }
+        },
+        "2": {
+            "1": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            },
+            "8": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            },
+            "16": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            }
+        },
+        "3": {
+            "1": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            },
+            "8": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            },
+            "16": {
+                "1024": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2048": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 4
+                    }
+                },
+                "2880": {
+                    "16": {
+                        "block_m": 16,
+                        "block_n": 256,
+                        "block_k": 256,
+                        "block_r": 16,
+                        "num_warps": 4,
+                        "num_stages": 3
+                    }
+                }
+            }
+        }
+    }
+}

@@ -134,7 +134,6 @@ def _get_lora_b_ptr(lora_weights: list[torch.Tensor], offset_start: int,
     return _LORA_B_PTR_DICT.get(key)
 
 
-
 @functools.lru_cache
 def load_v1_op_config(op_type: str,
                       add_inputs: Optional[bool]) -> Optional[Dict]:
@@ -174,6 +173,7 @@ def get_v1_op_configs(
         hidden_size: int,
         rank: int,
         num_slices: int,
+        out_dim: Optional[int] = None,
         add_inputs: Optional[bool] = None) -> dict[str, Optional[int]]:
 
     assert op_type in ["shrink", "expand", "fused"]
@@ -206,38 +206,57 @@ def get_v1_op_configs(
             'block_m': 16,
             'block_n': 256,
             'block_k': 256,
-            'block_r': 256,
-            'num_warps': 8,
+            'num_warps': 4,
             'num_ctas': 1,
-            'num_stages': 5,
+            'num_stages': 4,
         }
 
 
     m = batch
-
-    k, n = (hidden_size, rank) if op_type == "shrink" or "fused" else (rank, hidden_size)
+    if op_type == "shrink":
+        k, n = (hidden_size, rank)
+    elif op_type == "expand":
+        k, n = (rank, hidden_size)
+    else:
+        k, n, r = (hidden_size, out_dim, rank)
 
     config_data: Any
     config_data = load_v1_op_config(op_type, add_inputs)
     if not config_data:
-        logger.warning_once("Using default configs for LoRA.")
         return default
-
-    # config is structured as config_data[max_loras][num_slices][m][k][n] = {}
-    # slice by max_loras
-    config_data = config_data.get(str(max_loras)) or config_data[min(
+    if op_type == "fused":
+        config_data = config_data.get(str(max_loras)) or config_data[min(
         config_data.keys(), key=lambda x: abs(int(x) - max_loras))]
-    # slice by num_slices
-    config_data = config_data[str(num_slices)]
-    # slice by m
-    config_data = config_data.get(str(m)) or config_data[min(
-        config_data.keys(), key=lambda x: abs(int(x) - m))]
-    # slice by k
-    config_data = config_data.get(str(k)) or config_data[min(
-        config_data.keys(), key=lambda x: abs(int(x) - k))]
-    # slice by n
-    config_data = config_data.get(str(n)) or config_data[min(
-        config_data.keys(), key=lambda x: abs(int(x) - n))]
+        # slice by num_slices
+        config_data = config_data[str(num_slices)]
+        # slice by m
+        config_data = config_data.get(str(m)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - m))]
+        # slice by k
+        config_data = config_data.get(str(k)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - k))]
+        # slice by n
+        config_data = config_data.get(str(n)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - n))]
+        config_data = config_data.get(str(n)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - r))]
+
+    else:
+        # config is structured as config_data[max_loras][num_slices][m][k][n] = {}
+        # slice by max_loras
+        config_data = config_data.get(str(max_loras)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - max_loras))]
+        # slice by num_slices
+        config_data = config_data[str(num_slices)]
+        # slice by m
+        config_data = config_data.get(str(m)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - m))]
+        # slice by k
+        config_data = config_data.get(str(k)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - k))]
+        # slice by n
+        config_data = config_data.get(str(n)) or config_data[min(
+            config_data.keys(), key=lambda x: abs(int(x) - n))]
 
     assert config_data is not None
     return config_data
