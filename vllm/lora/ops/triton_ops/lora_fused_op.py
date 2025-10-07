@@ -282,4 +282,4 @@ try:
     lora_shrink_expand = torch.ops.vllm.lora_shrink_expand
 
 except AttributeError:
-    fused_shrink_expand = _lora_shrink_expand
+    lora_shrink_expand = _lora_shrink_expand
