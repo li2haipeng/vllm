@@ -16,7 +16,7 @@ from vllm.triton_utils import HAS_TRITON
 
 if HAS_TRITON:
     from vllm.lora.ops.triton_ops import (LoRAKernelMeta, lora_expand,
-                                          lora_shrink)
+                                          lora_shrink, lora_shrink_expand)
 
 from .punica_base import PunicaWrapperBase
 
@@ -160,6 +160,27 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             offset_start=0,
             add_inputs=add_inputs,
         )
+    
+    def add_shrink_expand(self, 
+                          y: torch.Tensor, 
+                          x: torch.Tensor,
+                          lora_a_stacked: tuple[torch.Tensor, ...], 
+                          lora_b_stacked: tuple[torch.Tensor, ...],
+                          scale: float,
+                          offset_start: int = 0,
+                          ) -> None:
+        x = x.view(-1, x.shape[-1]).contiguous()
+        y_org = y
+        y = y.view(-1, y.shape[-1])
+
+        num_tokens = x.size(0)  # first dimension is the num slices
+        lora_shrink_expand(x, lora_a_stacked, lora_b_stacked, y, 
+                           *self.token_mapping_meta.meta_args(num_tokens),
+                            scaling=scale,
+                            offset_start=offset_start,
+                            add_inputs=True,
+                           )
+        y = y.view_as(y_org)
 
     def add_lora_linear(self,
                         y: torch.Tensor,
@@ -203,29 +224,39 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             y = self._apply_bias(token_lora_indices, y, output_slices,
                                  lora_bias_stacked)
 
-        if buffer is None:
-            r = lora_b_stacked[0].size(-1)
-            # We set the buffer to be float32 by default, refer to:
-            # https://github.com/triton-lang/triton/issues/1387
-            buffer = torch.zeros(  # type: ignore
-                (len(output_slices), x.size(0), r),
-                dtype=torch.float32,
-                device=x.device,
-            )
-        self.add_shrink(
-            buffer,  # type: ignore
-            x,
-            lora_a_stacked,
-            scale,
-            **kwargs)
-        self.add_expand(
-            y,
-            buffer,  # type: ignore
-            lora_b_stacked,
-            None,
-            output_slices,
-            add_inputs=True,
-            **kwargs)
+        K = x.size(1)
+        if K <=1024:
+            assert len(output_slices)==1
+            self.add_shrink_expand(y,
+                                    x,
+                                    lora_a_stacked,
+                                    lora_b_stacked,
+                                    scale,
+                                    )
+        else:
+            if buffer is None:
+                r = lora_b_stacked[0].size(-1)
+                # We set the buffer to be float32 by default, refer to:
+                # https://github.com/triton-lang/triton/issues/1387
+                buffer = torch.zeros(  # type: ignore
+                    (len(output_slices), x.size(0), r),
+                    dtype=torch.float32,
+                    device=x.device,
+                )
+            self.add_shrink(
+                buffer,  # type: ignore
+                x,
+                lora_a_stacked,
+                scale,
+                **kwargs)
+            self.add_expand(
+                y,
+                buffer,  # type: ignore
+                lora_b_stacked,
+                None,
+                output_slices,
+                add_inputs=True,
+                **kwargs)
 
     def add_lora_logits(self,
                         y: torch.Tensor,
