@@ -85,6 +85,7 @@ def _apply_lora(
         indices:         (batch_size)
         output:          (batch_size, output_dim)
     """
+    # print("!!", lora_a_stacked.shape)
     org_output = output
     x = x.view(-1, x.shape[-1])
     output = output.view(-1, output.shape[-1])
@@ -121,6 +122,7 @@ def _apply_lora_packed_nslice(
         output_slices:     n-1 element tuple of (slice_size...),
                            where n is number of slices
     """
+    # print("????", output_slices)
     org_output = output
     x = x.view(-1, x.shape[-1])
     output = output.view(-1, output.shape[-1])

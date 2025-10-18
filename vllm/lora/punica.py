@@ -183,6 +183,13 @@ def add_lora_slice(y: torch.Tensor,
         buffer = torch.zeros((x.size(0), r),
                              dtype=torch.float32,
                              device=x.device)
+    if x.size(0) == 1:
+      print("buffer",buffer.shape)
+      print("x", x.shape)
+      print("wa", wa_t_all.shape)
+      print("wb", wb_t_all.shape)
+      print("indicies", indicies)
+      print("y", y.shape)
     ops.dispatch_bgmv_low_level(
         buffer,
         x,
