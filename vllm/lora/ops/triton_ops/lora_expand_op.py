@@ -45,13 +45,22 @@ def _lora_expand_kernel(
     CAST_TYPE: tl.constexpr,
     SLICE_NUM: tl.constexpr,
     SAME_STRIDE: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
     cta_n_num = tl.cdiv(N, BLOCK_N)
     cta_m_num = tl.cdiv(M, BLOCK_M)
 
     pid_mn = tl.program_id(axis=0)
-    pid_m = pid_mn % cta_m_num
-    pid_n = (pid_mn // cta_m_num) % cta_n_num
+    # pid_m = pid_mn % cta_m_num
+    # pid_n = (pid_mn // cta_m_num) % cta_n_num
+    
+    num_pid_in_group = GROUP_SIZE_M * cta_n_num
+    group_id = pid_mn // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+
+    group_size_m = min(cta_m_num - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid_mn % num_pid_in_group) % group_size_m)
+    pid_n = (pid_mn % num_pid_in_group) // group_size_m
 
     slice_id = tl.program_id(axis=1)
     lora_idx = tl.program_id(axis=2)
@@ -216,7 +225,8 @@ def _lora_expand(
     NUM_WARPS = kernel_config["num_warps"]
     NUM_CTAS = kernel_config["num_ctas"]
     NUM_STAGES = kernel_config["num_stages"]
-
+    # GROUP_SIZE_M = kernel_config['group_size_m']
+    GROUP_SIZE_M = 8
     EVEN_K = K % BLOCK_K == 0  # type: ignore
 
     if inputs.dtype == torch.float32 and lora_b_weights[0].dtype in [
@@ -266,6 +276,7 @@ def _lora_expand(
         CAST_TYPE,
         NUM_SLICES,
         same_stride,
+        GROUP_SIZE_M,
         num_warps=NUM_WARPS,
         num_ctas=NUM_CTAS,
         num_stages=NUM_STAGES,

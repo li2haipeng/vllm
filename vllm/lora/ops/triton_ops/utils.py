@@ -200,6 +200,7 @@ def get_lora_op_configs(
             "num_warps": 4,
             "num_ctas": 1,
             "num_stages": 2,
+            "group_size_m": 8,
             "max_nreg": None,
         }
     else:
