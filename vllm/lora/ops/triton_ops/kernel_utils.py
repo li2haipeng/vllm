@@ -102,6 +102,7 @@ def do_expand_kernel(
     EVEN_K: tl.constexpr,
     CAST_TYPE: tl.constexpr,
     ADD_INPUTS: tl.constexpr,
+    USE_GDC: tl.constexpr,
 ):
     """
     Given an array of integers that identifies the rows of A, ram,
@@ -154,6 +155,8 @@ def do_expand_kernel(
 
     # Compute the block matrix product.
     SPLIT_K = 1
+    if USE_GDC:
+        tl.extra.cuda.gdc_wait()
     accumulator = mm_k(
         a_ptr,
         b_ptr,
@@ -223,6 +226,7 @@ def do_shrink_kernel(
     EVEN_K: tl.constexpr,
     SPLIT_K: tl.constexpr,
     SLICE_NUM: tl.constexpr,
+    USE_GDC: tl.constexpr,
 ):
     """
     Given an array of integers that identifies the rows of A, ram,
@@ -286,6 +290,8 @@ def do_shrink_kernel(
     c_mask = (offset_cm[:, None] < M_LEN) & (offset_cn[None, :] < N)
 
     accumulator *= scaling
+    if USE_GDC:
+        tl.extra.cuda.gdc_launch_dependents()
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
         tl.store(c_ptr, accumulator, mask=c_mask)
