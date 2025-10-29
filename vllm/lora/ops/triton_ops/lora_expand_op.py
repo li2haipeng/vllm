@@ -122,6 +122,7 @@ def _lora_expand_kernel(
         EVEN_K,
         CAST_TYPE,
         ADD_INPUTS,
+        USE_GDC,
     )
 
 
