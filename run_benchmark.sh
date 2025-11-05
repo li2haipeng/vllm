@@ -4,7 +4,7 @@
 # -----------------------------
 #Output Directory
 export VLLM_TUNED_CONFIG_FOLDER=/home/ubuntu/workplace/KernelTuner/src/KernelTuner/Triton/multi_lora/configs/qwen3-32B-new
-RESULTS_BASE_DIR="/home/ubuntu/workplace/LlmPerf/src/LlmPerf/results/Qwen3-32B-eagle2-lora"
+RESULTS_BASE_DIR="/home/ubuntu/workplace/LlmPerf/src/LlmPerf/results/Qwen3-32B-eagle2"
 PORT=8000
 
 MODEL_NAME=/home/ubuntu/models/Qwen3-32B
@@ -23,12 +23,13 @@ DATASET_BASE_PATH="/home/ubuntu/workplace/BISBenchmarking/src/BISBenchmarking/da
 DATASETS=(
   'HumanEval_python_sample_1000' 'gsm8k_sample_1000' 'mtbench_80_json' 
 )
-CONCURRENCY_VALUES=(1 8 16)
+CONCURRENCY_VALUES=(2 4)
 MEAN_OUTPUT_TOKENS=(800)
 STDDEV_OUTPUT_TOKENS=150
 TIMEOUT=3600 #21600
 MAX_NUM_COMPLETED_REQUESTS=100 #1000
-SAMPLING_PARAMS='{"temperature": 0, "seed": 11111, "adapter": "adapter"}'
+# SAMPLING_PARAMS='{"temperature": 0, "seed": 11111, "adapter": "adapter"}'
+SAMPLING_PARAMS='{"temperature": 0, "seed": 11111}'
 SONNET_INPUT_TOKENS_VALUES=(1600)
 SONNET_INPUT_TOKENS_STD=150
 LM_HEAD_QUANTIZATION=("fp16")
@@ -62,25 +63,25 @@ start_vllm_server() {
         --reasoning-parser qwen3 \
         --enable-auto-tool-choice \
         --port $PORT
-        --enable-lora --max-loras 16 \
-        --lora-modules \
-            adapter0=$LORA_PATH \
-            adapter1=$LORA_PATH \
-            adapter2=$LORA_PATH \
-            adapter3=$LORA_PATH \
-            adapter4=$LORA_PATH \
-            adapter5=$LORA_PATH \
-            adapter6=$LORA_PATH \
-            adapter7=$LORA_PATH \
-            adapter8=$LORA_PATH \
-            adapter9=$LORA_PATH \
-            adapter10=$LORA_PATH \
-            adapter11=$LORA_PATH \
-            adapter12=$LORA_PATH \
-            adapter13=$LORA_PATH \
-            adapter14=$LORA_PATH \
-            adapter15=$LORA_PATH \
-        --max-lora-rank 32 \
+        # --enable-lora --max-loras 16 \
+        # --lora-modules \
+        #     adapter0=$LORA_PATH \
+        #     adapter1=$LORA_PATH \
+        #     adapter2=$LORA_PATH \
+        #     adapter3=$LORA_PATH \
+        #     adapter4=$LORA_PATH \
+        #     adapter5=$LORA_PATH \
+        #     adapter6=$LORA_PATH \
+        #     adapter7=$LORA_PATH \
+        #     adapter8=$LORA_PATH \
+        #     adapter9=$LORA_PATH \
+        #     adapter10=$LORA_PATH \
+        #     adapter11=$LORA_PATH \
+        #     adapter12=$LORA_PATH \
+        #     adapter13=$LORA_PATH \
+        #     adapter14=$LORA_PATH \
+        #     adapter15=$LORA_PATH \
+        # --max-lora-rank 32 \
         )
 
     if [ "$num_speculative_tokens" -gt 0 ]; then

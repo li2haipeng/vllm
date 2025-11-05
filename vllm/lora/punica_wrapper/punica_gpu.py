@@ -82,6 +82,14 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         """
 
         x = x.view(-1, x.shape[-1])
+        # print("....shrink....")
+        # print("x-shape", x.view(-1, x.shape[-1]).shape)
+        # for i in range(len(lora_a_stacked)):
+        #     print(f"a{i}", lora_a_stacked[i].shape)
+        #     # print(f"b{i}", lora_b_stacked[i].shape)
+        
+        # print("y_shape", y.shape)
+        # print(".........")
         lora_shrink(
             x,
             lora_a_stacked,
@@ -129,7 +137,14 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         assert x.ndim == 3
         assert x.size(0) == len(output_slices)
         num_tokens = x.size(1)  # first dimension is the num slices
-
+        # print("....expnad....")
+        # print("x-shape", x.view(-1, x.shape[-1]).shape)
+        # for i in range(len(lora_b_stacked)):
+        #     # print(f"a{i}", lora_a_stacked[i].shape)
+        #     print(f"b{i}", lora_b_stacked[i].shape)
+        
+        # print("y_shape", y.shape)
+        # print(".........")
         lora_expand(
             x,
             lora_b_stacked,
@@ -211,6 +226,14 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             y = self._apply_bias(token_lora_indices, y, output_slices,
                                  lora_bias_stacked)
 
+        # print("........")
+        # print("x-shape", x.view(-1, x.shape[-1]).shape)
+        # for i in range(len(output_slices)):
+        #     print(f"a{i}", lora_a_stacked[i].shape)
+        #     print(f"b{i}", lora_b_stacked[i].shape)
+        
+        # print("y_shape", y.shape)
+        # print(".........")
         if buffer is None:
             r = lora_b_stacked[0].size(-1)
             # We set the buffer to be float32 by default, refer to:
