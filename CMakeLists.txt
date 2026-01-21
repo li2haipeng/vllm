@@ -1096,6 +1096,44 @@ define_extension_target(
   USE_SABI 3
   WITH_SOABI)
 
+set(VLLM_LORA_EXT_SRC
+  "csrc/lora/torch_bindings.cpp"
+  "csrc/lora/sgmv_lora_ops.cu"
+)
+
+# SM90 CUTLASS 3.x grouped GEMM kernels for LoRA
+cuda_archs_loose_intersection(LORA_SM90_ARCHS "9.0a" "${CUDA_ARCHS}")
+set(LORA_CUTLASS_SM90_ENABLED FALSE)
+if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.0 AND LORA_SM90_ARCHS)
+  set(LORA_SM90_SRCS "csrc/lora/sgmv_cutlass/sgmv_cutlass.cu")
+  set_gencode_flags_for_srcs(
+    SRCS "${LORA_SM90_SRCS}"
+    CUDA_ARCHS "${LORA_SM90_ARCHS}")
+  list(APPEND VLLM_LORA_EXT_SRC "${LORA_SM90_SRCS}")
+  set(LORA_CUTLASS_SM90_ENABLED TRUE)
+  message(STATUS "Building LoRA CUTLASS SM90 kernels for archs: ${LORA_SM90_ARCHS}")
+else()
+  message(STATUS "Not building LoRA CUTLASS SM90 kernels (requires CUDA >= 12.0 and SM90)")
+endif()
+
+message(STATUS "Enabling lora extension.")
+define_extension_target(
+  _lora_C
+  DESTINATION vllm
+  LANGUAGE CUDA
+  SOURCES ${VLLM_LORA_EXT_SRC}
+  COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+  ARCHITECTURES ${VLLM_GPU_ARCHES}
+  INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR}
+  INCLUDE_DIRECTORIES ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+  USE_SABI 3
+  WITH_SOABI)
+
+# Add SM90 flag for both CUDA and CXX compilation
+if(LORA_CUTLASS_SM90_ENABLED)
+  target_compile_definitions(_lora_C PRIVATE ENABLE_LORA_CUTLASS_SM90=1)
+endif()
+
 if(VLLM_GPU_LANG STREQUAL "HIP")
   #
   # _rocm_C extension

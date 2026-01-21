@@ -14,6 +14,7 @@ import torch
 from vllm.lora.layers import LoRAMapping
 from vllm.triton_utils import HAS_TRITON, triton
 from vllm.utils.math_utils import round_up
+from .utils import convert_vllm_metadata_to_cutlass, reorder_input_by_lora
 
 if HAS_TRITON:
     from vllm.lora.ops.triton_ops import (
@@ -24,6 +25,7 @@ if HAS_TRITON:
     )
 
 from vllm import _custom_ops as ops
+import vllm._lora_C  # noqa: F401 - triggers torch op registration
 
 from .punica_base import PunicaWrapperBase
 
@@ -96,14 +98,30 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             scale (float): Scaling factor for the operation
         """
 
-        x = x.view(-1, x.shape[-1])
-        lora_shrink(
-            x,
-            lora_a_stacked,
-            y,
-            *self.token_mapping_meta.meta_args(x.size(0)),
-            scale,
-        )
+        x = x.view(-1, x.shape[-1]).contiguous()
+
+        ##### cutlass sgmv shrink op  #######
+        w_a_ptr = torch.tensor([w.data_ptr() for w in lora_a_stacked], 
+                        dtype=torch.int64, device=x.device)
+        num_slices = len(lora_a_stacked)
+        num_loras = lora_a_stacked[0].size(0)
+        tmp_size = num_slices * num_loras * 1024
+        tmp = torch.zeros(tmp_size, dtype=torch.uint8, device="cuda")
+        
+        (token_indices_sorted, s_cutlass) = convert_vllm_metadata_to_cutlass(self.token_mapping_meta.token_lora_mapping[:x.size(0)], num_loras)
+        
+        x_sorted = reorder_input_by_lora(x, token_indices_sorted)
+
+        torch.ops._lora_C.dispatch_sgmv_shrink_stacked(y.zero_(), x_sorted, w_a_ptr, s_cutlass, tmp)
+        ##################################
+
+        # lora_shrink(
+        #     x,
+        #     lora_a_stacked,
+        #     y,
+        #     *self.token_mapping_meta.meta_args(x.size(0)),
+        #     scale,
+        # )
 
     def add_expand(
         self,
@@ -225,7 +243,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         buffer = torch.empty(
             (len(output_slices), x.size(0), r), dtype=torch.float32, device=x.device
         )
-
+        # print(buffer)
         self.add_shrink(
             buffer,  # type: ignore
             x,

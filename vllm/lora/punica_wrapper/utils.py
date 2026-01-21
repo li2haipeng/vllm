@@ -148,3 +148,58 @@ def convert_mapping(
         embeddings_indices,
         indices_len,
     )
+
+def convert_vllm_metadata_to_cutlass(
+    token_lora_mapping: torch.Tensor,
+    num_loras: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Convert vLLM-style token_lora_mapping to CUTLASS segment format.
+    
+    vLLM uses:
+        - token_lora_mapping: [num_tokens] mapping each token to a lora_id
+        - token_indices_sorted_by_lora_ids: [num_tokens] reordered token indices
+        - num_tokens_per_lora: [max_loras] count of tokens per lora
+        - lora_token_start_loc: [max_loras + 1] cumsum of num_tokens_per_lora
+        - lora_ids: [max_loras] active lora ids
+    
+    CUTLASS uses:
+        - s: [num_loras + 1] segment boundaries (cumsum of tokens per lora)
+        - Assumes tokens are already sorted by lora_id
+    
+    Args:
+        token_lora_mapping: [num_tokens] tensor mapping tokens to lora_ids
+        num_loras: number of active LoRA adapters
+    
+    Returns:
+        token_indices_sorted_by_lora_ids: [num_tokens] reordered indices
+        num_tokens_per_lora: [num_loras] token counts
+        lora_token_start_loc: [num_loras + 1] cumsum
+        lora_ids: [num_loras] lora ids (0 to num_loras-1)
+        s: [num_loras + 1] segment boundaries for CUTLASS
+    """
+    device = token_lora_mapping.device
+    
+    # Sort token indices by lora_id
+    sorted_indices = torch.argsort(token_lora_mapping, stable=True)
+    token_indices_sorted_by_lora_ids = sorted_indices.to(torch.int64)
+    
+    # Count tokens per lora
+    num_tokens_per_lora = torch.zeros(num_loras, dtype=torch.int64, device=device)
+    for lora_id in range(num_loras):
+        num_tokens_per_lora[lora_id] = (token_lora_mapping == lora_id).sum()
+    
+    # Compute start locations (cumsum)
+    lora_token_start_loc = torch.zeros(num_loras + 1, dtype=torch.int64, device=device)
+    lora_token_start_loc[1:] = torch.cumsum(num_tokens_per_lora, dim=0)
+    
+    # CUTLASS segment format: same as lora_token_start_loc but int32
+    s = lora_token_start_loc.to(torch.int32)
+    
+    return (token_indices_sorted_by_lora_ids, s)
+
+
+def reorder_input_by_lora(x: torch.Tensor, 
+                          token_indices_sorted: torch.Tensor) -> torch.Tensor:
+    """Reorder input tensor by sorted lora indices for CUTLASS."""
+    return x[token_indices_sorted]

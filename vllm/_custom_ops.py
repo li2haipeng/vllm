@@ -3088,3 +3088,98 @@ if hasattr(torch.ops._C, "hadacore_transform"):
     @register_fake("_C::hadacore_transform")
     def _hadacore_transform_fake(x: torch.Tensor, inplace: bool) -> torch.Tensor:
         return torch.empty_like(x) if not inplace else x
+
+
+def sgmv_tmp_size(num_loras: int, num_slices: int) -> int:
+    """
+    Get required tmp buffer size for SGMV operations.
+    
+    Args:
+        num_loras: Number of LoRA adapters
+        num_slices: Number of weight slices
+        
+    Returns:
+        Required tmp buffer size in bytes
+    """
+    import vllm._lora_C  # noqa: F401 - triggers torch op registration
+    return torch.ops._lora_C.sgmv_tmp_size(num_loras, num_slices)
+
+
+def sgmv_shrink_stacked(
+    y: torch.Tensor,
+    x: torch.Tensor,
+    w_ptrs: torch.Tensor,
+    s: torch.Tensor,
+    tmp: torch.Tensor,
+    y_slice_stride: int,
+    w_lora_stride: int,
+    num_loras: int,
+    num_slices: int,
+    d_in: int,
+    d_out: int,
+) -> None:
+    """
+    SGMV Shrink operation for LoRA using CUTLASS grouped GEMM.
+    
+    Computes: y[slice][token] = x[token] @ w[slice][lora_id]
+    where tokens are grouped by lora_id according to segment indices s.
+    
+    Args:
+        y: Output tensor [num_slices, total_tokens, d_out]
+        x: Input tensor [total_tokens, d_in]
+        w_ptrs: [num_slices] pointers to stacked [num_loras, d_out, d_in] tensors
+        s: Segment indices [num_loras + 1]
+        tmp: Temporary buffer (use sgmv_tmp_size to get required size)
+        y_slice_stride: Stride between slices in y
+        w_lora_stride: Stride between LoRAs in w
+        num_loras: Number of LoRA adapters
+        num_slices: Number of weight slices (e.g., 3 for qkv)
+        d_in: Input dimension
+        d_out: Output dimension per slice
+    """
+    import vllm._lora_C  # noqa: F401 - triggers torch op registration
+    torch.ops._lora_C.sgmv_shrink_stacked(
+        y, x, w_ptrs, s, tmp, y_slice_stride, w_lora_stride,
+        num_loras, num_slices, d_in, d_out)
+
+
+def sgmv_expand_stacked(
+    y: torch.Tensor,
+    x: torch.Tensor,
+    w_ptrs: torch.Tensor,
+    s: torch.Tensor,
+    d_out_per_slice: torch.Tensor,
+    slice_start_loc: torch.Tensor,
+    w_lora_strides: torch.Tensor,
+    tmp: torch.Tensor,
+    y_row_stride: int,
+    x_slice_stride: int,
+    num_loras: int,
+    num_slices: int,
+    d_in: int,
+) -> None:
+    """
+    SGMV Expand operation for LoRA using CUTLASS grouped GEMM.
+    
+    Computes: y[token, col_offset:col_offset+d_out] = x[slice][token] @ w[slice][lora_id]
+    Output is 2D concatenated tensor (vLLM format).
+    
+    Args:
+        y: Output tensor [total_tokens, sum(d_out_per_slice)]
+        x: Input tensor [num_slices, total_tokens, d_in]
+        w_ptrs: [num_slices] pointers to stacked [num_loras, d_out, d_in] tensors
+        s: Segment indices [num_loras + 1]
+        d_out_per_slice: [num_slices] output dimension per slice (int32)
+        slice_start_loc: [num_slices] column offset for each slice in output (int64)
+        w_lora_strides: [num_slices] stride between LoRA weights per slice (int64)
+        tmp: Temporary buffer (use sgmv_tmp_size to get required size)
+        y_row_stride: Row stride in y (= sum of d_out_per_slice)
+        x_slice_stride: Stride between slices in x
+        num_loras: Number of LoRA adapters
+        num_slices: Number of weight slices
+        d_in: Input dimension (LoRA rank)
+    """
+    import vllm._lora_C  # noqa: F401 - triggers torch op registration
+    torch.ops._lora_C.sgmv_expand_stacked(
+        y, x, w_ptrs, s, d_out_per_slice, slice_start_loc, w_lora_strides,
+        tmp, y_row_stride, x_slice_stride, num_loras, num_slices, d_in)
