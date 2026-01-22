@@ -16,6 +16,7 @@ bool sgmv_shrink_stacked(DType *y, int64_t y_slice_stride,
                          void *tmp_d,
                          int num_loras,
                          int num_slices,
+                         int num_tokens,
                          int d_in,
                          int d_out,
                          cudaStream_t stream);

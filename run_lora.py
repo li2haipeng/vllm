@@ -16,7 +16,7 @@ sampling_params = SamplingParams(
 )
 
 prompts = [
-    "Hello, my name is "
+    "Hello, my name is Lora, and I am a",
 ]
 lora_path = "/home/ubuntu/models/loras/gpt-oss-120b-Lora/lora_adapter"
 outputs = llm.generate(

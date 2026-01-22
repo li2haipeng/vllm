@@ -13,12 +13,13 @@ bool sgmv_shrink_stacked<half>(half *y, int64_t y_slice_stride,
                                void *tmp_d,
                                int num_loras,
                                int num_slices,
+                               int num_tokens,
                                int d_in,
                                int d_out,
                                cudaStream_t stream) {
   return run_sgmv_shrink_stacked_kernel<ShrinkConfig>(
       y, y_slice_stride, x, w, w_lora_stride, s, tmp_d,
-      num_loras, num_slices, d_in, d_out, stream);
+      num_loras, num_slices, num_tokens, d_in, d_out, stream);
 }
 
 template <>
@@ -30,12 +31,13 @@ bool sgmv_shrink_stacked<nv_bfloat16>(nv_bfloat16 *y, int64_t y_slice_stride,
                                       void *tmp_d,
                                       int num_loras,
                                       int num_slices,
+                                      int num_tokens,
                                       int d_in,
                                       int d_out,
                                       cudaStream_t stream) {
   return run_sgmv_shrink_stacked_kernel<ShrinkConfigBf16>(
       y, y_slice_stride, x, w, w_lora_stride, s, tmp_d,
-      num_loras, num_slices, d_in, d_out, stream);
+      num_loras, num_slices, num_tokens, d_in, d_out, stream);
 }
 
 // Multi-slice expand stacked

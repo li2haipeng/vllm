@@ -203,3 +203,17 @@ def reorder_input_by_lora(x: torch.Tensor,
                           token_indices_sorted: torch.Tensor) -> torch.Tensor:
     """Reorder input tensor by sorted lora indices for CUTLASS."""
     return x[token_indices_sorted]
+
+def scatter_output_by_lora(y_sorted: torch.Tensor,
+                           token_indices_sorted: torch.Tensor,
+                           original_shape: tuple) -> torch.Tensor:
+    """Scatter CUTLASS output back to original token order."""
+    if y_sorted.dim() == 2:
+        y_original = torch.zeros(original_shape, dtype=y_sorted.dtype, device=y_sorted.device)
+        y_original[token_indices_sorted] = y_sorted
+    else:  # 3D: [num_slices, num_tokens, d_out]
+        num_slices = y_sorted.size(0)
+        y_original = torch.zeros(original_shape, dtype=y_sorted.dtype, device=y_sorted.device)
+        for s in range(num_slices):
+            y_original[s, token_indices_sorted] = y_sorted[s]
+    return y_original

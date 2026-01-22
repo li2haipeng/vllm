@@ -55,7 +55,7 @@ void dispatch_sgmv_shrink_stacked(torch::Tensor y, torch::Tensor x,
         w_lora_stride,
         s.data_ptr<int32_t>(),
         tmp.data_ptr(),
-        num_loras, num_slices, d_in, d_out, stream);
+        num_loras, num_slices, total_tokens, d_in, d_out, stream);
     break;
   case at::ScalarType::BFloat16:
     ok = sgmv_shrink_stacked(
@@ -66,7 +66,7 @@ void dispatch_sgmv_shrink_stacked(torch::Tensor y, torch::Tensor x,
         w_lora_stride,
         s.data_ptr<int32_t>(),
         tmp.data_ptr(),
-        num_loras, num_slices, d_in, d_out, stream);
+        num_loras, num_slices, total_tokens, d_in, d_out, stream);
     break;
   default:
     TORCH_CHECK(false, "Unsupported dtype: ", x.scalar_type());

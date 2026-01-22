@@ -166,6 +166,7 @@ bool run_sgmv_shrink_stacked_kernel(DType *y, int64_t y_slice_stride,
                                     void *tmp_d,
                                     int num_loras,
                                     int num_slices,
+                                    int num_tokens,
                                     int d_in,
                                     int d_out,
                                     cudaStream_t stream) {
@@ -176,6 +177,10 @@ bool run_sgmv_shrink_stacked_kernel(DType *y, int64_t y_slice_stride,
   using StrideC = typename GemmConfig::StrideC;
   using StrideD = typename GemmConfig::StrideD;
   using UnderlyingProblemShape = typename ProblemShape::UnderlyingProblemShape;
+
+  // Zero out y buffer - required for correctness
+  size_t y_size_bytes = static_cast<size_t>(num_slices) * num_tokens * d_out * sizeof(DType);
+  cudaMemsetAsync(y, 0, y_size_bytes, stream);
 
   int total_problems = num_loras * num_slices;
 
@@ -405,6 +410,7 @@ bool sgmv_shrink_stacked(DType *y, int64_t y_slice_stride,
                          void *tmp_d,
                          int num_loras,
                          int num_slices,
+                         int num_tokens,
                          int d_in,
                          int d_out,
                          cudaStream_t stream);

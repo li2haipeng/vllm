@@ -14,7 +14,7 @@ import torch
 from vllm.lora.layers import LoRAMapping
 from vllm.triton_utils import HAS_TRITON, triton
 from vllm.utils.math_utils import round_up
-from .utils import convert_vllm_metadata_to_cutlass, reorder_input_by_lora
+from .utils import convert_vllm_metadata_to_cutlass, reorder_input_by_lora, scatter_output_by_lora
 
 if HAS_TRITON:
     from vllm.lora.ops.triton_ops import (
@@ -99,29 +99,13 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         """
 
         x = x.view(-1, x.shape[-1]).contiguous()
-
-        ##### cutlass sgmv shrink op  #######
-        w_a_ptr = torch.tensor([w.data_ptr() for w in lora_a_stacked], 
-                        dtype=torch.int64, device=x.device)
-        num_slices = len(lora_a_stacked)
-        num_loras = lora_a_stacked[0].size(0)
-        tmp_size = num_slices * num_loras * 1024
-        tmp = torch.zeros(tmp_size, dtype=torch.uint8, device="cuda")
-        
-        (token_indices_sorted, s_cutlass) = convert_vllm_metadata_to_cutlass(self.token_mapping_meta.token_lora_mapping[:x.size(0)], num_loras)
-        
-        x_sorted = reorder_input_by_lora(x, token_indices_sorted)
-
-        torch.ops._lora_C.dispatch_sgmv_shrink_stacked(y.zero_(), x_sorted, w_a_ptr, s_cutlass, tmp)
-        ##################################
-
-        # lora_shrink(
-        #     x,
-        #     lora_a_stacked,
-        #     y,
-        #     *self.token_mapping_meta.meta_args(x.size(0)),
-        #     scale,
-        # )
+        lora_shrink(
+            x,
+            lora_a_stacked,
+            y,
+            *self.token_mapping_meta.meta_args(x.size(0)),
+            scale,
+        )
 
     def add_expand(
         self,
@@ -164,6 +148,110 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             offset_start=offset_start,
             add_inputs=True,
         )
+
+        y = y.view_as(y_org)
+
+    def add_cutlass_shrink(
+            self,
+            y: torch.Tensor,
+            x: torch.Tensor,
+            lora_a_stacked: tuple[torch.Tensor, ...],
+            scale: float,
+            **kwargs,
+        ):
+        """
+        Performs GEMM  for multiple slices of lora_a using CUTLASS.
+        Semantics:
+        for i in range(len(lora_a_stacked)):
+            y[i] += (x @ lora_a_stacked[i]) * scale 
+        Args:
+            y (torch.Tensor): Output tensors
+            x (torch.Tensor): Input tensor
+            lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weights
+            scale (float): Scaling factor for the operation
+        """
+        x = x.view(-1, x.shape[-1]).contiguous()
+
+        w_a_ptr = torch.tensor([w.data_ptr() for w in lora_a_stacked], 
+                        dtype=torch.int64, device=x.device)
+        num_slices = len(lora_a_stacked)
+        num_loras = lora_a_stacked[0].size(0)
+        total_tokens = x.size(0)
+        lora_rank = lora_a_stacked[0].size(2)
+        tmp_size = num_slices * num_loras * 1024
+        tmp = torch.zeros(tmp_size, dtype=torch.uint8, device="cuda")
+        
+        (token_indices_sorted, s_cutlass) = convert_vllm_metadata_to_cutlass(self.token_mapping_meta.token_lora_mapping[:x.size(0)], num_loras)
+        
+        x_sorted = reorder_input_by_lora(x, token_indices_sorted)
+
+        torch.ops._lora_C.dispatch_sgmv_shrink_stacked(y, x_sorted, w_a_ptr, s_cutlass, tmp)
+        y = scatter_output_by_lora(y, token_indices_sorted,
+                                            (num_slices, total_tokens, lora_rank))
+
+
+    def add_cutlass_expand(
+        self,
+        y: torch.Tensor,
+        x: torch.Tensor,
+        lora_b_stacked: tuple[torch.Tensor, ...],
+        output_slices: tuple[int, ...],
+        offset_start: int = 0,
+        add_inputs=True,
+        **kwargs,
+    ) -> None:
+        """
+        Performs GEMM for multiple slices of lora_b using CUTLASS.
+        Semantics:
+            for i in range(len(lora_b_stacked)):
+                slice = output_slices[i]
+                y[:, offset:offset+slice] += x[i] @ lora_b_stacked[i]
+                offset += slice
+        Args:
+            y (torch.Tensor): Output tensor.
+            x (torch.Tensor): Input tensors
+            lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight
+            output_slices (tuple[int, ...]): Every slice's size
+            add_inputs (bool): Defaults to True.
+        """
+        y_org = y
+        y = y.view(-1, y.shape[-1])
+
+        assert x.ndim == 3
+        assert x.size(0) == len(output_slices)
+        num_tokens = x.size(1)  # first dimension is the num slices
+
+        w_b_ptr = torch.tensor([w.data_ptr() for w in lora_b_stacked], 
+                        dtype=torch.int64, device=x.device)
+        num_slices = len(lora_b_stacked)
+        num_loras = lora_b_stacked[0].size(0)
+        tmp_size = num_slices * num_loras * 1024
+        tmp = torch.zeros(tmp_size, dtype=torch.uint8, device="cuda")
+        
+        # Get segment info - input x is already sorted from shrink output
+        (token_indices_sorted, s_cutlass) = convert_vllm_metadata_to_cutlass(self.token_mapping_meta.token_lora_mapping[:num_tokens], num_loras)
+
+        # Compute slice start locations and per-slice output dimensions
+        d_out_per_slice = torch.tensor(output_slices, dtype=torch.int32, device=x.device)
+        slice_start_loc = torch.zeros(num_slices, dtype=torch.int64, device=x.device)
+        slice_start_loc[0] = offset_start
+        for i in range(1, num_slices):
+            slice_start_loc[i] = slice_start_loc[i-1] + output_slices[i-1]
+        
+        # Compute w_lora_strides for each slice
+        d_in = x.size(2)
+        w_lora_strides = torch.tensor([output_slices[i] * d_in for i in range(num_slices)], 
+                                       dtype=torch.int64, device=x.device)
+
+        # Create output buffer for sorted results
+        y_sorted = torch.zeros_like(y)
+        
+        torch.ops._lora_C.dispatch_sgmv_expand_stacked(y_sorted, x, w_b_ptr, s_cutlass, 
+                                                        d_out_per_slice, slice_start_loc, 
+                                                        w_lora_strides, tmp)
+        
+        # Scatter output back to original token order and add to y
+        y[token_indices_sorted] += y_sorted
 
         y = y.view_as(y_org)
 
@@ -240,18 +328,35 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         # We set the buffer to be float32 by default, refer to:
         # https://github.com/triton-lang/triton/issues/1387
         # Note: buffer is zeroed inside the shrink op
+        # buffer = torch.empty(
+        #     (len(output_slices), x.size(0), r), dtype=torch.float32, device=x.device
+        # )
+        # self.add_shrink(
+        #     buffer,  # type: ignore
+        #     x,
+        #     lora_a_stacked,
+        #     scale,
+        #     **kwargs,
+        # )
+        # self.add_expand(
+        #     y,
+        #     buffer,  # type: ignore
+        #     lora_b_stacked,
+        #     output_slices,
+        #     add_inputs=True,
+        #     **kwargs,
+        # )
         buffer = torch.empty(
-            (len(output_slices), x.size(0), r), dtype=torch.float32, device=x.device
+            (len(output_slices), x.size(0), r), dtype=torch.bfloat16, device=x.device
         )
-        # print(buffer)
-        self.add_shrink(
+        self.add_cutlass_shrink(
             buffer,  # type: ignore
             x,
             lora_a_stacked,
             scale,
             **kwargs,
         )
-        self.add_expand(
+        self.add_cutlass_expand(
             y,
             buffer,  # type: ignore
             lora_b_stacked,
