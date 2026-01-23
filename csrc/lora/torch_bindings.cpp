@@ -4,7 +4,6 @@
 #include "sgmv_lora_ops.h"
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, m) {
-  // vLLM-compatible SGMV Shrink
   // y: [num_slices, num_tokens, d_out] output (zeroed inside kernel)
   // x_sorted: [num_tokens, d_in] input gathered by token_indices_sorted_by_lora_ids
   // w_list: list of weight tensors [num_slices], each [num_loras, d_out, d_in]
@@ -15,7 +14,6 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, m) {
         "Tensor lora_token_start_loc, Tensor active_lora_ids, Tensor tmp, Tensor w_ptr) -> ()");
   m.impl("dispatch_sgmv_shrink_vllm", torch::kCUDA, &dispatch_sgmv_shrink_vllm);
 
-  // vLLM-compatible SGMV Expand
   // y: [num_tokens, total_d_out] output (scatter done internally)
   // x: [num_slices, num_tokens, d_in] input in sorted order (from shrink)
   // w_list: list of weight tensors [num_slices]

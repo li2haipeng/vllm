@@ -2,7 +2,6 @@
 
 #include <torch/all.h>
 
-// vLLM-compatible SGMV Shrink
 // x_sorted: input gathered by token_indices_sorted_by_lora_ids
 // lora_token_start_loc: [num_lora_indices + 1] cumsum of tokens per lora group
 // active_lora_ids: [num_lora_indices] actual lora IDs for each group
@@ -14,7 +13,6 @@ void dispatch_sgmv_shrink_vllm(torch::Tensor y, torch::Tensor x_sorted,
                                torch::Tensor tmp,
                                torch::Tensor w_ptr);
 
-// vLLM-compatible SGMV Expand
 // y: output tensor (scatter is done internally)
 // x: input in sorted order (from shrink output)
 // token_indices_sorted: indices for scatter operation

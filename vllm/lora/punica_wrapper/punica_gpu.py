@@ -18,6 +18,7 @@ from vllm.utils.torch_utils import direct_register_custom_op
 
 if HAS_TRITON:
     from vllm.lora.ops.triton_ops import (
+        CutlassLoRAKernelMeta,
         LoRAKernelMeta,
         fused_moe_lora,
         lora_expand,
@@ -30,15 +31,7 @@ import vllm._lora_C  # noqa: F401 - triggers torch op registration
 from .punica_base import PunicaWrapperBase
 
 
-
-
-# ============================================================================
-# CUTLASS LoRA kernels registered as custom ops for torch.compile compatibility
-# ============================================================================
-# These functions are registered as custom ops so torch.compile treats them
-# as opaque - it won't trace into them, which allows us to use data_ptr()
-# for caching metadata tensors (similar to Triton's approach).
-# ============================================================================
+USE_CUTLASS_LORA = False
 
 @torch.inference_mode()
 def _cutlass_shrink(
@@ -47,31 +40,19 @@ def _cutlass_shrink(
     lora_a_weights: list[torch.Tensor],
     token_lora_mapping: torch.Tensor,
     token_indices_sorted: torch.Tensor,
+    token_indices_sorted_int64: torch.Tensor,
     num_tokens_per_lora: torch.Tensor,
     lora_token_start_loc: torch.Tensor,
     lora_ids: torch.Tensor,
     no_lora_flag_cpu: torch.Tensor,
     cutlass_tmp: torch.Tensor,
     w_ptr_buffer: torch.Tensor,
-    token_indices_sorted_int64: torch.Tensor,
     scale: float,
 ) -> None:
-    """
-    CUTLASS SGMV shrink kernel wrapper.
-    
-    This function is registered as a custom op so torch.compile won't trace into it.
-    """
+    """CUTLASS SGMV shrink kernel wrapper."""
     num_tokens = x.size(0)
-    
-    # Copy int32 indices to pre-allocated int64 buffer (fixed address for cudagraph)
-    token_indices_sorted_int64[:num_tokens].copy_(token_indices_sorted[:num_tokens])
-    
-    # Use index_select which produces a contiguous output
-    # Note: This creates a new tensor, but it's necessary because the C++ kernel
-    # requires contiguous input. The tensor address will be captured in cudagraph.
     x_sorted = torch.index_select(x, 0, token_indices_sorted_int64[:num_tokens])
     
-    # Call the C++ kernel
     torch.ops._lora_C.dispatch_sgmv_shrink_vllm(
         y, x_sorted, lora_a_weights,
         lora_token_start_loc, lora_ids,
@@ -84,13 +65,13 @@ def _cutlass_shrink_fake(
     lora_a_weights: list[torch.Tensor],
     token_lora_mapping: torch.Tensor,
     token_indices_sorted: torch.Tensor,
+    token_indices_sorted_int64: torch.Tensor,
     num_tokens_per_lora: torch.Tensor,
     lora_token_start_loc: torch.Tensor,
     lora_ids: torch.Tensor,
     no_lora_flag_cpu: torch.Tensor,
     cutlass_tmp: torch.Tensor,
     w_ptr_buffer: torch.Tensor,
-    token_indices_sorted_int64: torch.Tensor,
     scale: float,
 ) -> None:
     """Fake implementation for torch.compile tracing."""
@@ -113,36 +94,23 @@ def _cutlass_expand(
     cutlass_tmp: torch.Tensor,
     w_ptr_buffer: torch.Tensor,
     y_sorted_buffer: torch.Tensor,
-    # Pre-allocated GPU metadata buffers (for cudagraph compatibility)
     d_out_per_slice_buffer: torch.Tensor,
     slice_start_loc_buffer: torch.Tensor,
     w_lora_strides_buffer: torch.Tensor,
-    # Pre-allocated pinned CPU buffers (source for cudaMemcpyAsync)
     d_out_per_slice_cpu: torch.Tensor,
     slice_start_loc_cpu: torch.Tensor,
     w_lora_strides_cpu: torch.Tensor,
     add_inputs: bool,
 ) -> None:
-    """
-    CUTLASS SGMV expand kernel wrapper.
-    
-    This function is registered as a custom op so torch.compile won't trace into it.
-    Metadata tensors are pre-allocated (both GPU and pinned CPU) for cudagraph compatibility.
-    """
+    """CUTLASS SGMV expand kernel wrapper."""
     num_tokens = x.size(1)
     num_slices = len(lora_b_weights)
     total_d_out = y.size(1)
     
-    # Update pinned CPU buffers (these have fixed addresses)
-    # Then copy to GPU buffers (also fixed addresses)
-    # This pattern is cudagraph-safe because both source and destination have stable addresses
-    
-    # d_out_per_slice
     for i, s in enumerate(output_slices):
         d_out_per_slice_cpu[i] = s
     d_out_per_slice_buffer[:num_slices].copy_(d_out_per_slice_cpu[:num_slices], non_blocking=True)
     
-    # slice_start_loc
     slice_start = offset_start
     for i in range(num_slices):
         slice_start_loc_cpu[i] = slice_start
@@ -150,15 +118,12 @@ def _cutlass_expand(
             slice_start += output_slices[i]
     slice_start_loc_buffer[:num_slices].copy_(slice_start_loc_cpu[:num_slices], non_blocking=True)
     
-    # w_lora_strides
     for i, w in enumerate(lora_b_weights):
         w_lora_strides_cpu[i] = w.stride(0)
     w_lora_strides_buffer[:num_slices].copy_(w_lora_strides_cpu[:num_slices], non_blocking=True)
     
-    # Get a view of y_sorted_buffer with exact dimensions
     y_sorted = y_sorted_buffer[:num_tokens, :total_d_out]
     
-    # Call the C++ kernel
     torch.ops._lora_C.dispatch_sgmv_expand_vllm(
         y, x, lora_b_weights,
         lora_token_start_loc, lora_ids,
@@ -255,55 +220,40 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             self.max_loras, max_num_batched_tokens, device=device
         )
         
-        # Pre-allocated buffers for CUTLASS kernels (cudagraph compatibility)
-        # These are sized for worst-case and reused across calls
-        # Max slices is typically 3 (for qkv) but we use a larger value for safety
+        # CUTLASS kernel metadata (separate to avoid affecting Triton)
+        if USE_CUTLASS_LORA:
+            self._init_cutlass_buffers(max_num_batched_tokens, device)
+
+    def _init_cutlass_buffers(self, max_num_batched_tokens: int, device: torch.device | str):
+        """Initialize pre-allocated buffers for CUTLASS kernels."""
+        self.cutlass_token_mapping_meta = CutlassLoRAKernelMeta.make(
+            self.max_loras, max_num_batched_tokens, device=device
+        )
+        
         self._max_slices = 8
         num_lora_indices = self.max_loras + 1
         
-        # Temporary buffer for CUTLASS grouped GEMM
         tmp_size = num_lora_indices * self._max_slices * 1024
         self._cutlass_tmp = torch.zeros(tmp_size, dtype=torch.uint8, device=device)
-        
-        # Pre-allocated buffer for weight pointers (for cudagraph compatibility)
-        # This avoids allocating inside C++ which breaks cudagraph
         self._w_ptr_buffer = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         
-        # Pre-allocated y_sorted buffer for expand kernel
-        # Size: max_num_batched_tokens x max_hidden_size
-        # We use a large max_hidden_size to cover typical model sizes
-        # This buffer MUST have fixed address for cudagraph compatibility
-        self._max_hidden_size = 32768  # Should cover most models (e.g., 8192 for Llama-70B)
-        # We allocate buffers for both fp16 and bf16 to avoid reallocation during cudagraph
+        self._max_hidden_size = 32768
         self._y_sorted_buffer_fp16 = torch.empty(
             (max_num_batched_tokens, self._max_hidden_size),
-            dtype=torch.float16,
-            device=device
+            dtype=torch.float16, device=device
         )
         self._y_sorted_buffer_bf16 = torch.empty(
             (max_num_batched_tokens, self._max_hidden_size),
-            dtype=torch.bfloat16,
-            device=device
+            dtype=torch.bfloat16, device=device
         )
         
-        # Pre-allocated metadata buffers for CUTLASS expand kernel
-        # These have fixed addresses for cudagraph compatibility
         self._d_out_per_slice_buffer = torch.zeros(self._max_slices, dtype=torch.int32, device=device)
         self._slice_start_loc_buffer = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         self._w_lora_strides_buffer = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         
-        # Pinned CPU buffers for metadata (source for cudaMemcpyAsync)
-        # These must have fixed addresses for cudagraph compatibility
         self._d_out_per_slice_cpu = torch.zeros(self._max_slices, dtype=torch.int32, pin_memory=True)
         self._slice_start_loc_cpu = torch.zeros(self._max_slices, dtype=torch.int64, pin_memory=True)
         self._w_lora_strides_cpu = torch.zeros(self._max_slices, dtype=torch.int64, pin_memory=True)
-        
-        # Pre-allocated int64 buffer for token_indices_sorted (for index_select)
-        # index_select requires int64 indices, but LoRAKernelMeta uses int32
-        # This buffer has a fixed address for cudagraph compatibility
-        self._token_indices_sorted_int64 = torch.empty(
-            max_num_batched_tokens, dtype=torch.int64, device=device
-        )
 
     def update_metadata(
         self,
@@ -319,6 +269,10 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         # Prepare cuda kernel metadata tensors
         self.token_mapping_meta.prepare_tensors(self.token_lora_indices)
         self.prompt_mapping_meta.prepare_tensors(self.sampler_indices)
+        
+        # Prepare CUTLASS kernel metadata
+        if USE_CUTLASS_LORA:
+            self.cutlass_token_mapping_meta.prepare_tensors(self.token_lora_indices)
 
     def add_shrink(
         self,
@@ -342,7 +296,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             scale (float): Scaling factor for the operation
         """
 
-        x = x.view(-1, x.shape[-1]).contiguous()
+        x = x.view(-1, x.shape[-1])
         lora_shrink(
             x,
             lora_a_stacked,
@@ -396,42 +350,38 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         y = y.view_as(y_org)
 
     def add_cutlass_shrink(
-            self,
-            y: torch.Tensor,
-            x: torch.Tensor,
-            lora_a_stacked: tuple[torch.Tensor, ...],
-            scale: float,
-            **kwargs,
-        ):
+        self,
+        y: torch.Tensor,
+        x: torch.Tensor,
+        lora_a_stacked: tuple[torch.Tensor, ...],
+        scale: float,
+        **kwargs,
+    ):
         """
         Performs GEMM for multiple slices of lora_a using CUTLASS.
-        
-        Uses vLLM's pre-allocated metadata tensors for cudagraph compatibility.
-        Output y is in SORTED order (by lora_id). The expand kernel expects
-        input in this sorted order.
-        
+
+        Semantics:
+        for i in range(len(lora_a_stacked)):
+            y[i] += (x @ lora_a_stacked[i]) * scale
+
         Args:
-            y (torch.Tensor): Output tensors [num_slices, num_tokens, d_out]
-            x (torch.Tensor): Input tensor [num_tokens, d_in]
+            y (torch.Tensor): Output tensors
+            x (torch.Tensor): Input tensor
             lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weights
-            scale (float): Scaling factor for the operation (not used in CUTLASS yet)
+            scale (float): Scaling factor for the operation
         """
         x = x.view(-1, x.shape[-1])
         num_tokens = x.size(0)
         
-        # Get metadata from LoRAKernelMeta (pre-allocated for cudagraph compatibility)
-        (token_lora_mapping, token_indices_sorted, num_tokens_per_lora,
-         lora_token_start_loc, active_lora_ids, no_lora_flag) = \
-            self.token_mapping_meta.meta_args(num_tokens)
+        (token_lora_mapping, token_indices_sorted, token_indices_sorted_int64,
+         num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag) = \
+            self.cutlass_token_mapping_meta.meta_args(num_tokens)
         
-        # Call the custom op (registered for torch.compile compatibility)
         cutlass_shrink(
             y, x, list(lora_a_stacked),
-            token_lora_mapping, token_indices_sorted, num_tokens_per_lora,
-            lora_token_start_loc, active_lora_ids, no_lora_flag,
-            self._cutlass_tmp, self._w_ptr_buffer,
-            self._token_indices_sorted_int64, scale)
-
+            token_lora_mapping, token_indices_sorted, token_indices_sorted_int64,
+            num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag,
+            self._cutlass_tmp, self._w_ptr_buffer, scale)
 
     def add_cutlass_expand(
         self,
@@ -445,18 +395,19 @@ class PunicaWrapperGPU(PunicaWrapperBase):
     ) -> None:
         """
         Performs GEMM for multiple slices of lora_b using CUTLASS.
-        
-        Uses vLLM's pre-allocated metadata tensors for cudagraph compatibility.
-        Input x is in sorted order (from shrink output).
-        Output is scattered back to original token order.
-        
+
+        Semantics:
+            for i in range(len(lora_b_stacked)):
+                slice = output_slices[i]
+                y[:, offset:offset+slice] += x[i] @ lora_b_stacked[i]
+                offset += slice
+
         Args:
-            y (torch.Tensor): Output tensor [num_tokens, total_d_out]
-            x (torch.Tensor): Input tensors [num_slices, num_tokens, d_in] in sorted order
+            y (torch.Tensor): Output tensor.
+            x (torch.Tensor): Input tensors
             lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight
             output_slices (tuple[int, ...]): Every slice's size
-            offset_start (int): Starting column offset
-            add_inputs (bool): Whether to add to existing y values
+            add_inputs (bool): Defaults to True.
         """
         y_org = y
         y = y.view(-1, y.shape[-1])
@@ -464,26 +415,18 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         assert x.ndim == 3
         assert x.size(0) == len(output_slices)
         num_tokens = x.size(1)
-        total_d_out = y.size(1)
 
-        # Get metadata from LoRAKernelMeta (pre-allocated for cudagraph compatibility)
-        (token_lora_mapping, token_indices_sorted, num_tokens_per_lora,
-         lora_token_start_loc, active_lora_ids, no_lora_flag) = \
-            self.token_mapping_meta.meta_args(num_tokens)
+        (token_lora_mapping, token_indices_sorted, _,
+         num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag) = \
+            self.cutlass_token_mapping_meta.meta_args(num_tokens)
         
-        # Select the correct y_sorted buffer based on dtype
-        if x.dtype == torch.float16:
-            y_sorted_buffer = self._y_sorted_buffer_fp16
-        else:
-            y_sorted_buffer = self._y_sorted_buffer_bf16
+        y_sorted_buffer = self._y_sorted_buffer_fp16 if x.dtype == torch.float16 else self._y_sorted_buffer_bf16
         
-        # Call the custom op (registered for torch.compile compatibility)
-        # All buffers (GPU and pinned CPU) are pre-allocated with fixed addresses
         cutlass_expand(
             y, x, list(lora_b_stacked),
             list(output_slices), offset_start,
-            token_lora_mapping, token_indices_sorted, num_tokens_per_lora,
-            lora_token_start_loc, active_lora_ids, no_lora_flag,
+            token_lora_mapping, token_indices_sorted,
+            num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag,
             self._cutlass_tmp, self._w_ptr_buffer, y_sorted_buffer,
             self._d_out_per_slice_buffer, self._slice_start_loc_buffer,
             self._w_lora_strides_buffer,
@@ -563,27 +506,24 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             ".add_lora_linear() instead of being passed in."
         )
         r = lora_b_stacked[0].size(-1)
-        
-        # Use same dtype as input for CUTLASS kernel
-        # Note: buffer is zeroed inside the shrink kernel
-        buffer = torch.empty(
-            (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
-        )
-        self.add_cutlass_shrink(
-            buffer,
-            x,
-            lora_a_stacked,
-            scale,
-            **kwargs,
-        )
-        self.add_cutlass_expand(
-            y,
-            buffer,
-            lora_b_stacked,
-            output_slices,
-            add_inputs=True,
-            **kwargs,
-        )
+
+        if USE_CUTLASS_LORA:
+            # CUTLASS path: use same dtype as input
+            buffer = torch.empty(
+                (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
+            )
+            self.add_cutlass_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+            self.add_cutlass_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
+        else:
+            # Triton path: use float32 buffer
+            # We set the buffer to be float32 by default, refer to:
+            # https://github.com/triton-lang/triton/issues/1387
+            # Note: buffer is zeroed inside the shrink op
+            buffer = torch.empty(
+                (len(output_slices), x.size(0), r), dtype=torch.float32, device=x.device
+            )
+            self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+            self.add_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
 
     def add_lora_logits(
         self,

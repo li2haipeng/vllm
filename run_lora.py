@@ -22,6 +22,6 @@ lora_path = "/home/ubuntu/models/loras/gpt-oss-120b-Lora/lora_adapter"
 outputs = llm.generate(
     prompts,
     sampling_params,
-    lora_request=LoRARequest("sql_adapter", 3, lora_path)
+    lora_request=LoRARequest("sql_adapter", 1, lora_path)
 )
 print(outputs[0].outputs[0].text)

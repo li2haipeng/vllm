@@ -1,6 +1,5 @@
 #include "sgmv_cutlass.cuh"
 
-// Template instantiations for vLLM-compatible shrink kernel
 template <>
 bool sgmv_shrink_vllm<nv_half>(nv_half *y, int64_t y_slice_stride,
                                nv_half *x_sorted,
@@ -15,7 +14,7 @@ bool sgmv_shrink_vllm<nv_half>(nv_half *y, int64_t y_slice_stride,
                                int d_in,
                                int d_out,
                                cudaStream_t stream) {
-  return run_sgmv_shrink_vllm_kernel<ShrinkConfig>(
+  return run_sgmv_shrink_kernel<ShrinkConfig>(
       y, y_slice_stride, x_sorted, w, w_lora_stride,
       lora_token_start_loc, active_lora_ids, tmp_d,
       num_lora_indices, num_slices, num_tokens, d_in, d_out, stream);
@@ -35,13 +34,12 @@ bool sgmv_shrink_vllm<nv_bfloat16>(nv_bfloat16 *y, int64_t y_slice_stride,
                                    int d_in,
                                    int d_out,
                                    cudaStream_t stream) {
-  return run_sgmv_shrink_vllm_kernel<ShrinkConfigBf16>(
+  return run_sgmv_shrink_kernel<ShrinkConfigBf16>(
       y, y_slice_stride, x_sorted, w, w_lora_stride,
       lora_token_start_loc, active_lora_ids, tmp_d,
       num_lora_indices, num_slices, num_tokens, d_in, d_out, stream);
 }
 
-// Template instantiations for vLLM-compatible expand kernel
 template <>
 bool sgmv_expand_vllm<nv_half>(nv_half *y,
                                int64_t y_row_stride,
@@ -62,7 +60,7 @@ bool sgmv_expand_vllm<nv_half>(nv_half *y,
                                int d_in,
                                bool add_inputs,
                                cudaStream_t stream) {
-  return run_sgmv_expand_vllm_kernel<ExpandConfig>(
+  return run_sgmv_expand_kernel<ExpandConfig>(
       y, y_row_stride, slice_start_loc,
       x, x_slice_stride, w, w_lora_strides,
       lora_token_start_loc, active_lora_ids, token_indices_sorted,
@@ -90,7 +88,7 @@ bool sgmv_expand_vllm<nv_bfloat16>(nv_bfloat16 *y,
                                    int d_in,
                                    bool add_inputs,
                                    cudaStream_t stream) {
-  return run_sgmv_expand_vllm_kernel<ExpandConfigBf16>(
+  return run_sgmv_expand_kernel<ExpandConfigBf16>(
       y, y_row_stride, slice_start_loc,
       x, x_slice_stride, w, w_lora_strides,
       lora_token_start_loc, active_lora_ids, token_indices_sorted,

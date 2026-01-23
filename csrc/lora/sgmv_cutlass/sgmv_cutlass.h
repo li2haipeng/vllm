@@ -5,9 +5,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-// vLLM-compatible SGMV Shrink kernel
-// Input x_sorted should be pre-gathered using token_indices_sorted_by_lora_ids
-// Output y is in sorted order (same order as x_sorted)
 template <typename DType>
 bool sgmv_shrink_vllm(DType *y, int64_t y_slice_stride,
                       DType *x_sorted,
@@ -23,11 +20,6 @@ bool sgmv_shrink_vllm(DType *y, int64_t y_slice_stride,
                       int d_out,
                       cudaStream_t stream);
 
-// vLLM-compatible SGMV Expand kernel
-// Input x is in sorted order (output from shrink)
-// Output is scattered to y using token_indices_sorted
-// y_sorted is a pre-allocated buffer for intermediate sorted output
-// y_sorted_stride is the row stride of y_sorted (may differ from y_row_stride if y_sorted is a view)
 template <typename DType>
 bool sgmv_expand_vllm(DType *y,
                       int64_t y_row_stride,
