@@ -4,7 +4,7 @@ from vllm.lora.request import LoRARequest
 llm = LLM(model="/home/ubuntu/models/gpt-oss-120b", 
           enable_lora=True, 
           tensor_parallel_size=1, 
-          enforce_eager=True,
+          enforce_eager=False,
           max_num_batched_tokens=16384,
           max_model_len=16384,
           max_lora_rank=32)

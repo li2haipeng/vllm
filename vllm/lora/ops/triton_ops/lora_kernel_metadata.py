@@ -73,6 +73,10 @@ class LoRAKernelMeta:
         self.num_tokens_per_lora.fill_(0)
         self.lora_token_start_loc.fill_(0)
         self.no_lora_flag_cpu.fill_(False)
+        # Initialize token_indices_sorted_by_lora_ids to identity mapping
+        # to ensure safe gather operations even if prepare_tensors exits early
+        # Note: This is overwritten with actual sorted indices when lora is active
+        self.token_indices_sorted_by_lora_ids.fill_(0)
 
     def prepare_tensors(self, token_lora_mapping: torch.Tensor) -> None:
         """
@@ -85,15 +89,23 @@ class LoRAKernelMeta:
 
         self._reset()
 
+        num_tokens = token_lora_mapping.size(0)
+
         # Check and record no-lora case.
         no_lora = torch.all(token_lora_mapping == -1)
         self.no_lora_flag_cpu[0] = no_lora
 
         if no_lora:
-            # Early exit. LoRA kernels will not be run.
+            # Even in no-lora case, we need valid indices for gather operations
+            # to avoid out-of-bounds access when torch.compile removes the
+            # no_lora check. Use identity mapping (0, 1, 2, ..., num_tokens-1).
+            # We use a pre-allocated arange tensor to avoid creating new tensors
+            # which would break cudagraph compatibility.
+            torch.arange(num_tokens, dtype=torch.int32, 
+                        device=token_lora_mapping.device,
+                        out=self.token_indices_sorted_by_lora_ids[:num_tokens])
+            # Early exit. LoRA kernels will not be run (but gather is safe).
             return
-
-        num_tokens = token_lora_mapping.size(0)
 
         # copy token lora mapping
         self.token_lora_mapping[:num_tokens].copy_(

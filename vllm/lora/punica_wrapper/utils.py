@@ -152,16 +152,13 @@ def convert_mapping(
 def convert_vllm_metadata_to_cutlass(
     token_lora_mapping: torch.Tensor,
     num_loras: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Convert vLLM-style token_lora_mapping to CUTLASS segment format.
     
     vLLM uses:
         - token_lora_mapping: [num_tokens] mapping each token to a lora_id
-        - token_indices_sorted_by_lora_ids: [num_tokens] reordered token indices
-        - num_tokens_per_lora: [max_loras] count of tokens per lora
-        - lora_token_start_loc: [max_loras + 1] cumsum of num_tokens_per_lora
-        - lora_ids: [max_loras] active lora ids
+          (can contain -1 for tokens without LoRA)
     
     CUTLASS uses:
         - s: [num_loras + 1] segment boundaries (cumsum of tokens per lora)
@@ -173,25 +170,33 @@ def convert_vllm_metadata_to_cutlass(
     
     Returns:
         token_indices_sorted_by_lora_ids: [num_tokens] reordered indices
-        num_tokens_per_lora: [num_loras] token counts
-        lora_token_start_loc: [num_loras + 1] cumsum
-        lora_ids: [num_loras] lora ids (0 to num_loras-1)
         s: [num_loras + 1] segment boundaries for CUTLASS
+        
+    Note: Tokens with lora_id=-1 are sorted to the beginning but excluded
+    from the segment boundaries. The kernel will only process tokens in
+    segments for lora_ids 0 to num_loras-1.
     """
     device = token_lora_mapping.device
     
-    # Sort token indices by lora_id
+    # Sort token indices by lora_id (stable sort preserves order within same lora_id)
+    # Tokens with -1 will be sorted to the beginning
     sorted_indices = torch.argsort(token_lora_mapping, stable=True)
     token_indices_sorted_by_lora_ids = sorted_indices.to(torch.int64)
     
-    # Count tokens per lora
+    # Count tokens with no lora (lora_id == -1)
+    num_no_lora_tokens = (token_lora_mapping == -1).sum().item()
+    
+    # Count tokens per lora (only for valid lora_ids 0 to num_loras-1)
     num_tokens_per_lora = torch.zeros(num_loras, dtype=torch.int64, device=device)
     for lora_id in range(num_loras):
         num_tokens_per_lora[lora_id] = (token_lora_mapping == lora_id).sum()
     
-    # Compute start locations (cumsum)
+    # Compute start locations (cumsum), offset by num_no_lora_tokens
+    # s[0] = num_no_lora_tokens (skip tokens with no lora)
+    # s[i+1] = s[i] + num_tokens_per_lora[i]
     lora_token_start_loc = torch.zeros(num_loras + 1, dtype=torch.int64, device=device)
-    lora_token_start_loc[1:] = torch.cumsum(num_tokens_per_lora, dim=0)
+    lora_token_start_loc[0] = num_no_lora_tokens
+    lora_token_start_loc[1:] = num_no_lora_tokens + torch.cumsum(num_tokens_per_lora, dim=0)
     
     # CUTLASS segment format: same as lora_token_start_loc but int32
     s = lora_token_start_loc.to(torch.int32)
