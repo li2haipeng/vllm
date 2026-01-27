@@ -14,11 +14,9 @@ import torch
 from vllm.lora.layers import LoRAMapping
 from vllm.triton_utils import HAS_TRITON, triton
 from vllm.utils.math_utils import round_up
-from vllm.utils.torch_utils import direct_register_custom_op
 
 if HAS_TRITON:
     from vllm.lora.ops.triton_ops import (
-        CutlassLoRAKernelMeta,
         LoRAKernelMeta,
         fused_moe_lora,
         lora_expand,
@@ -26,166 +24,17 @@ if HAS_TRITON:
     )
 
 from vllm import _custom_ops as ops
-import vllm._lora_C  # noqa: F401 - triggers torch op registration
 
 from .punica_base import PunicaWrapperBase
 
+USE_CUTLASS_LORA = True
 
-USE_CUTLASS_LORA = False
-
-@torch.inference_mode()
-def _cutlass_shrink(
-    y: torch.Tensor,
-    x: torch.Tensor,
-    lora_a_weights: list[torch.Tensor],
-    token_lora_mapping: torch.Tensor,
-    token_indices_sorted: torch.Tensor,
-    token_indices_sorted_int64: torch.Tensor,
-    num_tokens_per_lora: torch.Tensor,
-    lora_token_start_loc: torch.Tensor,
-    lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    cutlass_tmp: torch.Tensor,
-    w_ptr_buffer: torch.Tensor,
-    scale: float,
-) -> None:
-    """CUTLASS SGMV shrink kernel wrapper."""
-    num_tokens = x.size(0)
-    x_sorted = torch.index_select(x, 0, token_indices_sorted_int64[:num_tokens])
-    
-    torch.ops._lora_C.dispatch_sgmv_shrink_vllm(
-        y, x_sorted, lora_a_weights,
-        lora_token_start_loc, lora_ids,
-        cutlass_tmp, w_ptr_buffer)
-
-
-def _cutlass_shrink_fake(
-    y: torch.Tensor,
-    x: torch.Tensor,
-    lora_a_weights: list[torch.Tensor],
-    token_lora_mapping: torch.Tensor,
-    token_indices_sorted: torch.Tensor,
-    token_indices_sorted_int64: torch.Tensor,
-    num_tokens_per_lora: torch.Tensor,
-    lora_token_start_loc: torch.Tensor,
-    lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    cutlass_tmp: torch.Tensor,
-    w_ptr_buffer: torch.Tensor,
-    scale: float,
-) -> None:
-    """Fake implementation for torch.compile tracing."""
-    return
-
-
-@torch.inference_mode()
-def _cutlass_expand(
-    y: torch.Tensor,
-    x: torch.Tensor,
-    lora_b_weights: list[torch.Tensor],
-    output_slices: list[int],
-    offset_start: int,
-    token_lora_mapping: torch.Tensor,
-    token_indices_sorted: torch.Tensor,
-    num_tokens_per_lora: torch.Tensor,
-    lora_token_start_loc: torch.Tensor,
-    lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    cutlass_tmp: torch.Tensor,
-    w_ptr_buffer: torch.Tensor,
-    y_sorted_buffer: torch.Tensor,
-    d_out_per_slice_buffer: torch.Tensor,
-    slice_start_loc_buffer: torch.Tensor,
-    w_lora_strides_buffer: torch.Tensor,
-    d_out_per_slice_cpu: torch.Tensor,
-    slice_start_loc_cpu: torch.Tensor,
-    w_lora_strides_cpu: torch.Tensor,
-    add_inputs: bool,
-) -> None:
-    """CUTLASS SGMV expand kernel wrapper."""
-    num_tokens = x.size(1)
-    num_slices = len(lora_b_weights)
-    total_d_out = y.size(1)
-    
-    for i, s in enumerate(output_slices):
-        d_out_per_slice_cpu[i] = s
-    d_out_per_slice_buffer[:num_slices].copy_(d_out_per_slice_cpu[:num_slices], non_blocking=True)
-    
-    slice_start = offset_start
-    for i in range(num_slices):
-        slice_start_loc_cpu[i] = slice_start
-        if i < num_slices - 1:
-            slice_start += output_slices[i]
-    slice_start_loc_buffer[:num_slices].copy_(slice_start_loc_cpu[:num_slices], non_blocking=True)
-    
-    for i, w in enumerate(lora_b_weights):
-        w_lora_strides_cpu[i] = w.stride(0)
-    w_lora_strides_buffer[:num_slices].copy_(w_lora_strides_cpu[:num_slices], non_blocking=True)
-    
-    y_sorted = y_sorted_buffer[:num_tokens, :total_d_out]
-    
-    torch.ops._lora_C.dispatch_sgmv_expand_vllm(
-        y, x, lora_b_weights,
-        lora_token_start_loc, lora_ids,
-        d_out_per_slice_buffer[:num_slices],
-        slice_start_loc_buffer[:num_slices],
-        w_lora_strides_buffer[:num_slices],
-        cutlass_tmp,
-        token_indices_sorted,
-        y_sorted,
-        w_ptr_buffer,
-        add_inputs)
-
-
-def _cutlass_expand_fake(
-    y: torch.Tensor,
-    x: torch.Tensor,
-    lora_b_weights: list[torch.Tensor],
-    output_slices: list[int],
-    offset_start: int,
-    token_lora_mapping: torch.Tensor,
-    token_indices_sorted: torch.Tensor,
-    num_tokens_per_lora: torch.Tensor,
-    lora_token_start_loc: torch.Tensor,
-    lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    cutlass_tmp: torch.Tensor,
-    w_ptr_buffer: torch.Tensor,
-    y_sorted_buffer: torch.Tensor,
-    d_out_per_slice_buffer: torch.Tensor,
-    slice_start_loc_buffer: torch.Tensor,
-    w_lora_strides_buffer: torch.Tensor,
-    d_out_per_slice_cpu: torch.Tensor,
-    slice_start_loc_cpu: torch.Tensor,
-    w_lora_strides_cpu: torch.Tensor,
-    add_inputs: bool,
-) -> None:
-    """Fake implementation for torch.compile tracing."""
-    return
-
-
-# Register custom ops
-try:
-    direct_register_custom_op(
-        op_name="cutlass_shrink",
-        op_func=_cutlass_shrink,
-        mutates_args=["y"],
-        fake_impl=_cutlass_shrink_fake,
+if USE_CUTLASS_LORA:
+    from vllm.lora.ops.cuda_ops import(
+        CutlassLoRAKernelMeta,
+        cutlass_shrink,
+        cutlass_expand
     )
-    cutlass_shrink = torch.ops.vllm.cutlass_shrink
-except AttributeError:
-    cutlass_shrink = _cutlass_shrink
-
-try:
-    direct_register_custom_op(
-        op_name="cutlass_expand",
-        op_func=_cutlass_expand,
-        mutates_args=["y"],
-        fake_impl=_cutlass_expand_fake,
-    )
-    cutlass_expand = torch.ops.vllm.cutlass_expand
-except AttributeError:
-    cutlass_expand = _cutlass_expand
 
 
 @final
@@ -230,7 +79,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             self.max_loras, max_num_batched_tokens, device=device
         )
         
-        self._max_slices = 8
+        self._max_slices = 3
         num_lora_indices = self.max_loras + 1
         
         tmp_size = num_lora_indices * self._max_slices * 1024
@@ -283,7 +132,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         **kwargs,
     ):
         """
-        Performs GEMM  for multiple slices of lora_a.
+        Performs GEMM for multiple slices of lora_a.
 
         Semantics:
         for i in range(len(lora_a_stacked)):
@@ -433,6 +282,74 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             self._d_out_per_slice_cpu, self._slice_start_loc_cpu,
             self._w_lora_strides_cpu,
             add_inputs)
+
+        y = y.view_as(y_org)
+    
+    def add_bgmv_shrink(
+        self,
+        y: torch.Tensor,
+        x: torch.Tensor,
+        lora_a_stacked: tuple[torch.Tensor, ...],
+        scale: float,
+        **kwargs,
+    ) -> None:
+        """
+        Performs GEMM for multiple slices of lora_a using CUTLASS.
+
+        Semantics:
+        for i in range(len(lora_a_stacked)):
+            y[i] += (x @ lora_a_stacked[i]) * scale
+
+        Args:
+            y (torch.Tensor): Output tensors
+            x (torch.Tensor): Input tensor
+            lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weights
+            scale (float): Scaling factor for the operation
+        """
+        x = x.view(-1, x.shape[-1])
+
+
+    def add_bgmv_expand(
+        self,
+        y: torch.Tensor,
+        x: torch.Tensor,
+        lora_b_stacked: tuple[torch.Tensor, ...],
+        output_slices: tuple[int, ...],
+        offset_start: int = 0,
+        add_inputs=True,
+        **kwargs,
+    ) -> None:
+        """
+        Performs GEMM for multiple slices of lora_b using CUTLASS.
+
+        Semantics:
+            for i in range(len(lora_b_stacked)):
+                slice = output_slices[i]
+                y[:, offset:offset+slice] += x[i] @ lora_b_stacked[i]
+                offset += slice
+
+        Args:
+            y (torch.Tensor): Output tensor.
+            x (torch.Tensor): Input tensors
+            lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight
+            output_slices (tuple[int, ...]): Every slice's size
+            add_inputs (bool): Defaults to True.
+        """
+        y_org = y
+        y = y.view(-1, y.shape[-1])
+
+        assert x.ndim == 3
+        assert x.size(0) == len(output_slices)
+        num_tokens = x.size(1)  # first dimension is the num slices
+
+        lora_expand(
+            x,
+            lora_b_stacked,
+            y,
+            *self.token_mapping_meta.meta_args(num_tokens),
+            offset_start=offset_start,
+            add_inputs=True,
+        )
 
         y = y.view_as(y_org)
 

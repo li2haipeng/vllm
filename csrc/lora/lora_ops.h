@@ -31,3 +31,18 @@ void dispatch_sgmv_expand_vllm(torch::Tensor y, torch::Tensor x,
                                torch::Tensor y_sorted,
                                torch::Tensor w_ptr,
                                bool add_inputs);
+
+// BGMV multi-slice operations
+// Shrink: input [num_tokens, hidden_size] -> output [num_slices, num_tokens, lora_rank]
+// Weights: list of [num_loras, lora_rank, hidden_size] per slice (vLLM format)
+// indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+void dispatch_bgmv_shrink_sliced(torch::Tensor y, torch::Tensor x,
+                                  torch::Tensor w_ptr, torch::Tensor indices);
+
+// Expand: input [num_slices, num_tokens, lora_rank] -> output [num_tokens, sum(d_out_per_slice)]
+// Weights: list of [num_loras, hidden_size, lora_rank] per slice (vLLM format)
+// indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+void dispatch_bgmv_expand_sliced(torch::Tensor y, torch::Tensor x,
+                                  torch::Tensor w_ptr, torch::Tensor indices,
+                                  torch::Tensor d_out_per_slice,
+                                  torch::Tensor slice_start_loc);

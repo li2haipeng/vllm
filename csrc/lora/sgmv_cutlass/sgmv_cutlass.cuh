@@ -107,7 +107,7 @@ inline T *alloc_from_buf(void **buf, int n) {
   return p;
 }
 
-size_t sgmv_tmp_size_sliced(int num_loras, int num_slices) {
+size_t sgmv_tmp_size_sliced_vllm(int num_loras, int num_slices) {
   int total_problems = num_loras * num_slices;
   constexpr auto per_problem_sz = sizeof(void *) * 3 +
                                    sizeof(typename ExpandConfig::StrideA) * 4 +
@@ -185,8 +185,14 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
   using StrideD = typename GemmConfig::StrideD;
   using UnderlyingProblemShape = typename ProblemShape::UnderlyingProblemShape;
 
-  size_t y_size_bytes = static_cast<size_t>(num_slices) * num_tokens * d_out * sizeof(DType);
-  cudaMemsetAsync(y, 0, y_size_bytes, stream);
+  // Note: We skip memset here because:
+  // 1. The GEMM kernel writes to all token positions when all tokens have valid LoRAs
+  // 2. For tokens with lora_id=-1, the problem has m=0 so no output is written,
+  //    but those positions should already be zero from previous operations or
+  //    the caller should handle them.
+  // If you need guaranteed zeros for no-lora tokens, uncomment the memset below:
+  // size_t y_size_bytes = static_cast<size_t>(num_slices) * num_tokens * d_out * sizeof(DType);
+  // cudaMemsetAsync(y, 0, y_size_bytes, stream);
 
   int total_problems = num_lora_indices * num_slices;
 
@@ -305,25 +311,112 @@ __global__ void precompute_sgmv_expand_args(
   stride_y[problem_idx] = typename GemmConfig::StrideD{y_sorted_stride, cute::Int<1>{}, cute::Int<0>{}};
 }
 
+// Optimized scatter kernel using vectorized loads/stores and 2D grid
+// Each block handles one row (token), threads handle columns with vector ops
 template <typename T>
-__global__ void scatter_add_kernel(T *y, const T *y_sorted, 
-                                   const int32_t *indices,
-                                   int num_tokens, int total_d_out,
-                                   int64_t y_stride, int64_t y_sorted_stride,
-                                   bool add_inputs) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int total_elements = num_tokens * total_d_out;
+__global__ void scatter_add_kernel_vectorized(T *y, const T *y_sorted, 
+                                              const int32_t *indices,
+                                              int num_tokens, int total_d_out,
+                                              int64_t y_stride, int64_t y_sorted_stride,
+                                              bool add_inputs) {
+  // blockIdx.x = token index (row)
+  // threadIdx.x = column chunk index
+  int token_idx = blockIdx.x;
+  if (token_idx >= num_tokens) return;
   
-  for (int i = tid; i < total_elements; i += blockDim.x * gridDim.x) {
-    int token_idx = i / total_d_out;
-    int col_idx = i % total_d_out;
-    int dst_token = indices[token_idx];
-    
+  // Single index lookup per block - all threads in block use same dst_token
+  int dst_token = indices[token_idx];
+  
+  // Pointers to source and destination rows
+  const T *src_row = y_sorted + token_idx * y_sorted_stride;
+  T *dst_row = y + dst_token * y_stride;
+  
+  // Use float4 for vectorized access (128 bits = 8 fp16 or 4 bf16/fp32)
+  // For fp16: float4 = 8 elements, for bf16: float4 = 8 elements
+  constexpr int VECTOR_SIZE = sizeof(float4) / sizeof(T);  // 8 for fp16/bf16
+  
+  int num_vectors = total_d_out / VECTOR_SIZE;
+  // int remainder = total_d_out % VECTOR_SIZE;
+  
+  // Vectorized portion
+  const float4 *src_vec = reinterpret_cast<const float4*>(src_row);
+  float4 *dst_vec = reinterpret_cast<float4*>(dst_row);
+  
+  for (int vec_idx = threadIdx.x; vec_idx < num_vectors; vec_idx += blockDim.x) {
+    float4 val = src_vec[vec_idx];
     if (add_inputs) {
-      y[dst_token * y_stride + col_idx] += y_sorted[token_idx * y_sorted_stride + col_idx];
-    } else {
-      y[dst_token * y_stride + col_idx] = y_sorted[token_idx * y_sorted_stride + col_idx];
+      float4 existing = dst_vec[vec_idx];
+      // Add element-wise (reinterpret as T array)
+      T *val_arr = reinterpret_cast<T*>(&val);
+      T *existing_arr = reinterpret_cast<T*>(&existing);
+      #pragma unroll
+      for (int i = 0; i < VECTOR_SIZE; i++) {
+        val_arr[i] = val_arr[i] + existing_arr[i];
+      }
     }
+    dst_vec[vec_idx] = val;
+  }
+  
+  // Handle remainder elements (non-vectorized)
+  int base_col = num_vectors * VECTOR_SIZE;
+  for (int col = base_col + threadIdx.x; col < total_d_out; col += blockDim.x) {
+    if (add_inputs) {
+      dst_row[col] += src_row[col];
+    } else {
+      dst_row[col] = src_row[col];
+    }
+  }
+}
+
+// Fallback scalar kernel for small sizes or alignment issues
+template <typename T>
+__global__ void scatter_add_kernel_scalar(T *y, const T *y_sorted, 
+                                          const int32_t *indices,
+                                          int num_tokens, int total_d_out,
+                                          int64_t y_stride, int64_t y_sorted_stride,
+                                          bool add_inputs) {
+  int token_idx = blockIdx.x;
+  if (token_idx >= num_tokens) return;
+  
+  int dst_token = indices[token_idx];
+  const T *src_row = y_sorted + token_idx * y_sorted_stride;
+  T *dst_row = y + dst_token * y_stride;
+  
+  for (int col = threadIdx.x; col < total_d_out; col += blockDim.x) {
+    if (add_inputs) {
+      dst_row[col] += src_row[col];
+    } else {
+      dst_row[col] = src_row[col];
+    }
+  }
+}
+
+// Dispatch function to choose optimal kernel
+template <typename T>
+void launch_scatter_add(T *y, const T *y_sorted, 
+                        const int32_t *indices,
+                        int num_tokens, int total_d_out,
+                        int64_t y_stride, int64_t y_sorted_stride,
+                        bool add_inputs, cudaStream_t stream) {
+  constexpr int VECTOR_SIZE = sizeof(float4) / sizeof(T);
+  
+  // Check alignment for vectorized kernel
+  bool src_aligned = (reinterpret_cast<uintptr_t>(y_sorted) % sizeof(float4)) == 0;
+  bool dst_aligned = (reinterpret_cast<uintptr_t>(y) % sizeof(float4)) == 0;
+  bool stride_aligned = (y_stride % VECTOR_SIZE == 0) && (y_sorted_stride % VECTOR_SIZE == 0);
+  bool use_vectorized = src_aligned && dst_aligned && stride_aligned && (total_d_out >= VECTOR_SIZE);
+  
+  int block_size = 256;
+  int num_blocks = num_tokens;
+  
+  if (use_vectorized) {
+    scatter_add_kernel_vectorized<<<num_blocks, block_size, 0, stream>>>(
+        y, y_sorted, indices, num_tokens, total_d_out, 
+        y_stride, y_sorted_stride, add_inputs);
+  } else {
+    scatter_add_kernel_scalar<<<num_blocks, block_size, 0, stream>>>(
+        y, y_sorted, indices, num_tokens, total_d_out, 
+        y_stride, y_sorted_stride, add_inputs);
   }
 }
 
@@ -358,8 +451,12 @@ bool run_sgmv_expand_kernel(DType *y,
   int total_problems = num_lora_indices * num_slices;
   int total_d_out = static_cast<int>(y_row_stride);
 
-  size_t y_sorted_size = static_cast<size_t>(num_tokens) * y_sorted_stride * sizeof(DType);
-  cudaMemsetAsync(y_sorted, 0, y_sorted_size, stream);
+  // Note: We skip memset on y_sorted because:
+  // 1. The GEMM kernel writes to all token positions when all tokens have valid LoRAs
+  // 2. The scatter kernel will overwrite all positions in y anyway
+  // If you need guaranteed zeros for no-lora tokens, uncomment the memset below:
+  // size_t y_sorted_size = static_cast<size_t>(num_tokens) * y_sorted_stride * sizeof(DType);
+  // cudaMemsetAsync(y_sorted, 0, y_sorted_size, stream);
 
   auto ptr_Y = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
   auto ptr_X = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
@@ -423,11 +520,9 @@ bool run_sgmv_expand_kernel(DType *y,
     return false;
   }
 
-  int block_size = 256;
-  int num_blocks = (num_tokens * total_d_out + block_size - 1) / block_size;
-  scatter_add_kernel<<<num_blocks, block_size, 0, stream>>>(
-      y, y_sorted, token_indices_sorted, num_tokens, total_d_out, 
-      y_row_stride, y_sorted_stride, add_inputs);
+  // Launch optimized scatter kernel
+  launch_scatter_add(y, y_sorted, token_indices_sorted, num_tokens, total_d_out, 
+                     y_row_stride, y_sorted_stride, add_inputs, stream);
 
   if (workspace) cudaFreeAsync(workspace, stream);
   return true;

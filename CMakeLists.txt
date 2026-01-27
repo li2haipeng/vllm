@@ -1098,8 +1098,28 @@ define_extension_target(
 
 set(VLLM_LORA_EXT_SRC
   "csrc/lora/torch_bindings.cpp"
-  "csrc/lora/sgmv_lora_ops.cu"
 )
+
+# BGMV CUDA kernels and lora_ops (require SM70+ for cuda::pipeline)
+cuda_archs_loose_intersection(BGMV_ARCHS "7.0;7.5;8.0;8.6;8.7;8.9;9.0" "${CUDA_ARCHS}")
+if(BGMV_ARCHS)
+  set(BGMV_SRCS
+    "csrc/lora/lora_ops.cu"
+    "csrc/lora/bgmv_cuda/bgmv_fp16_fp16_fp16.cu"
+    "csrc/lora/bgmv_cuda/bgmv_fp16_fp32_fp16.cu"
+    "csrc/lora/bgmv_cuda/bgmv_bf16_bf16_bf16.cu"
+    "csrc/lora/bgmv_cuda/bgmv_bf16_fp32_bf16.cu"
+    "csrc/lora/bgmv_cuda/bgmv_fp32_fp16_fp16.cu"
+    "csrc/lora/bgmv_cuda/bgmv_fp32_bf16_bf16.cu"
+  )
+  set_gencode_flags_for_srcs(
+    SRCS "${BGMV_SRCS}"
+    CUDA_ARCHS "${BGMV_ARCHS}")
+  list(APPEND VLLM_LORA_EXT_SRC "${BGMV_SRCS}")
+  message(STATUS "Building BGMV CUDA kernels for archs: ${BGMV_ARCHS}")
+else()
+  message(STATUS "Not building BGMV CUDA kernels (requires SM70+)")
+endif()
 
 # SM90 CUTLASS 3.x grouped GEMM kernels for LoRA
 cuda_archs_loose_intersection(LORA_SM90_ARCHS "9.0a" "${CUDA_ARCHS}")

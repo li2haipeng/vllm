@@ -1,7 +1,7 @@
 #include "core/registration.h"
 
 #ifdef ENABLE_LORA_CUTLASS_SM90
-#include "sgmv_lora_ops.h"
+#include "lora_ops.h"
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, m) {
   // y: [num_slices, num_tokens, d_out] output (zeroed inside kernel)
@@ -31,6 +31,19 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, m) {
         "Tensor d_out_per_slice, Tensor slice_start_loc, Tensor w_lora_strides, "
         "Tensor tmp, Tensor token_indices_sorted, Tensor y_sorted, Tensor w_ptr, bool add_inputs) -> ()");
   m.impl("dispatch_sgmv_expand_vllm", torch::kCUDA, &dispatch_sgmv_expand_vllm);
+
+  // BGMV multi-slice shrink 
+  // indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+  m.def(
+      "dispatch_bgmv_shrink_sliced(Tensor! y, Tensor x, Tensor w_ptr, Tensor indices) -> ()");
+  m.impl("dispatch_bgmv_shrink_sliced", torch::kCUDA, &dispatch_bgmv_shrink_sliced);
+
+  // BGMV multi-slice expand
+  // indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+  m.def(
+      "dispatch_bgmv_expand_sliced(Tensor! y, Tensor x, Tensor w_ptr, Tensor indices, "
+      "Tensor d_out_per_slice, Tensor slice_start_loc) -> ()");
+  m.impl("dispatch_bgmv_expand_sliced", torch::kCUDA, &dispatch_bgmv_expand_sliced);
 }
 #endif
 
