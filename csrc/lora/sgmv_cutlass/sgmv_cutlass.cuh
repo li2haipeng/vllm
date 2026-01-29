@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 #pragma once
 
 #include <cuda_bf16.h>
@@ -132,24 +134,22 @@ __global__ void precompute_sgmv_shrink_args(
     int num_lora_indices,
     int num_slices,
     int d_in,
-    int d_out) {
+    int d_out,
+    int max_loras) {
   int problem_idx = blockIdx.x;
   int slice_id = problem_idx / num_lora_indices;
   int lora_idx = problem_idx % num_lora_indices;
 
   int lora_id = active_lora_ids[lora_idx];
+  bool valid_lora = (lora_id >= 0 && lora_id < max_loras);
   
-  int m = 0;
-  if (lora_id >= 0) {
-    m = lora_token_start_loc[lora_idx + 1] - lora_token_start_loc[lora_idx];
-  }
+  int m = valid_lora ? (lora_token_start_loc[lora_idx + 1] - lora_token_start_loc[lora_idx]) : 0;
   int k = d_in;
   int n = d_out;
-
   int start_pos = lora_token_start_loc[lora_idx];
 
   all_problems[problem_idx] = {m, n, k};
-  ptr_w[problem_idx] = (lora_id >= 0) ? (w[slice_id] + lora_id * w_lora_stride) : nullptr;
+  ptr_w[problem_idx] = valid_lora ? (w[slice_id] + lora_id * w_lora_stride) : nullptr;
   ptr_x[problem_idx] = x_sorted + start_pos * d_in;
   ptr_y[problem_idx] = y + slice_id * y_slice_stride + start_pos * d_out;
 
@@ -176,6 +176,7 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
                             int num_tokens,
                             int d_in,
                             int d_out,
+                            int max_loras,
                             cudaStream_t stream) {
   using cutlass_t = typename cutlass_dtype<DType>::type;
   using Gemm = typename GemmConfig::Gemm;
@@ -185,16 +186,10 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
   using StrideD = typename GemmConfig::StrideD;
   using UnderlyingProblemShape = typename ProblemShape::UnderlyingProblemShape;
 
-  // Note: We skip memset here because:
-  // 1. The GEMM kernel writes to all token positions when all tokens have valid LoRAs
-  // 2. For tokens with lora_id=-1, the problem has m=0 so no output is written,
-  //    but those positions should already be zero from previous operations or
-  //    the caller should handle them.
-  // If you need guaranteed zeros for no-lora tokens, uncomment the memset below:
-  // size_t y_size_bytes = static_cast<size_t>(num_slices) * num_tokens * d_out * sizeof(DType);
-  // cudaMemsetAsync(y, 0, y_size_bytes, stream);
-
   int total_problems = num_lora_indices * num_slices;
+  if (total_problems == 0 || num_tokens == 0) {
+    return true;
+  }
 
   auto ptr_Y = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
   auto ptr_X = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
@@ -205,6 +200,19 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
   auto stride_Y = alloc_from_buf<StrideD>(&tmp_d, total_problems);
   auto all_problems = alloc_from_buf<UnderlyingProblemShape>(&tmp_d, total_problems);
 
+  // Check if we're in cudagraph capture mode
+  cudaStreamCaptureStatus capture_status;
+  cudaStreamIsCapturing(stream, &capture_status);
+  bool is_capturing = (capture_status == cudaStreamCaptureStatusActive);
+
+  // Only sync outside of cudagraph capture
+  if (!is_capturing) {
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+      return false;
+    }
+  }
+
   precompute_sgmv_shrink_args<GemmConfig, cutlass_t><<<total_problems, 1, 0, stream>>>(
       all_problems, ptr_Y, ptr_X, ptr_W, stride_X, stride_W, stride_C, stride_Y,
       (cutlass_t *)y, y_slice_stride,
@@ -212,10 +220,23 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
       (cutlass_t **)w,
       w_lora_stride,
       lora_token_start_loc, active_lora_ids,
-      num_lora_indices, num_slices, d_in, d_out);
+      num_lora_indices, num_slices, d_in, d_out, max_loras);
+
+  cudaError_t precompute_err = cudaGetLastError();
+  if (precompute_err != cudaSuccess) {
+    return false;
+  }
+  
+  // Only sync outside of cudagraph capture
+  if (!is_capturing) {
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+      return false;
+    }
+  }
 
   cutlass::KernelHardwareInfo hw_info;
-  hw_info.device_id = 0;
+  cudaGetDevice(&hw_info.device_id);
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
 
   typename Gemm::Arguments arguments{
@@ -227,33 +248,24 @@ bool run_sgmv_shrink_kernel(DType *y, int64_t y_slice_stride,
   };
 
   Gemm gemm;
-
-  auto status = gemm.can_implement(arguments);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_shrink can_implement failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.can_implement(arguments) != cutlass::Status::kSuccess) {
     return false;
   }
 
   size_t workspace_size = Gemm::get_workspace_size(arguments);
   void *workspace = nullptr;
   if (workspace_size > 0) {
-    cudaError_t cuda_status = cudaMallocAsync(&workspace, workspace_size, stream);
-    if (cuda_status != cudaSuccess) {
-      fprintf(stderr, "sgmv_shrink workspace allocation failed: %s\n", cudaGetErrorString(cuda_status));
+    if (cudaMallocAsync(&workspace, workspace_size, stream) != cudaSuccess) {
       return false;
     }
   }
 
-  status = gemm.initialize(arguments, workspace, stream);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_shrink initialize failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.initialize(arguments, workspace, stream) != cutlass::Status::kSuccess) {
     if (workspace) cudaFreeAsync(workspace, stream);
     return false;
   }
 
-  status = gemm.run(stream);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_shrink run failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.run(stream) != cutlass::Status::kSuccess) {
     if (workspace) cudaFreeAsync(workspace, stream);
     return false;
   }
@@ -281,25 +293,23 @@ __global__ void precompute_sgmv_expand_args(
     int32_t *d_out_per_slice,
     int num_lora_indices,
     int num_slices,
-    int d_in) {
+    int d_in,
+    int max_loras) {
   int problem_idx = blockIdx.x;
   int slice_id = problem_idx / num_lora_indices;
   int lora_idx = problem_idx % num_lora_indices;
 
   int lora_id = active_lora_ids[lora_idx];
+  bool valid_lora = (lora_id >= 0 && lora_id < max_loras);
   
-  int m = 0;
-  if (lora_id >= 0) {
-    m = lora_token_start_loc[lora_idx + 1] - lora_token_start_loc[lora_idx];
-  }
+  int m = valid_lora ? (lora_token_start_loc[lora_idx + 1] - lora_token_start_loc[lora_idx]) : 0;
   int k = d_in;
   int n = d_out_per_slice[slice_id];
-
   int start_pos = lora_token_start_loc[lora_idx];
   int64_t col_offset = slice_start_loc[slice_id];
 
   all_problems[problem_idx] = {m, n, k};
-  ptr_w[problem_idx] = (lora_id >= 0) ? (w[slice_id] + lora_id * w_lora_strides[slice_id]) : nullptr;
+  ptr_w[problem_idx] = valid_lora ? (w[slice_id] + lora_id * w_lora_strides[slice_id]) : nullptr;
   ptr_x[problem_idx] = x + slice_id * x_slice_stride + start_pos * d_in;
   ptr_y[problem_idx] = y_sorted + start_pos * y_sorted_stride + col_offset;
 
@@ -311,34 +321,24 @@ __global__ void precompute_sgmv_expand_args(
   stride_y[problem_idx] = typename GemmConfig::StrideD{y_sorted_stride, cute::Int<1>{}, cute::Int<0>{}};
 }
 
-// Optimized scatter kernel using vectorized loads/stores and 2D grid
-// Each block handles one row (token), threads handle columns with vector ops
+
+// Vectorized scatter-add kernel for expand operation
 template <typename T>
 __global__ void scatter_add_kernel_vectorized(T *y, const T *y_sorted, 
                                               const int32_t *indices,
                                               int num_tokens, int total_d_out,
                                               int64_t y_stride, int64_t y_sorted_stride,
                                               bool add_inputs) {
-  // blockIdx.x = token index (row)
-  // threadIdx.x = column chunk index
   int token_idx = blockIdx.x;
   if (token_idx >= num_tokens) return;
   
-  // Single index lookup per block - all threads in block use same dst_token
   int dst_token = indices[token_idx];
-  
-  // Pointers to source and destination rows
   const T *src_row = y_sorted + token_idx * y_sorted_stride;
   T *dst_row = y + dst_token * y_stride;
   
-  // Use float4 for vectorized access (128 bits = 8 fp16 or 4 bf16/fp32)
-  // For fp16: float4 = 8 elements, for bf16: float4 = 8 elements
-  constexpr int VECTOR_SIZE = sizeof(float4) / sizeof(T);  // 8 for fp16/bf16
-  
+  constexpr int VECTOR_SIZE = sizeof(float4) / sizeof(T);
   int num_vectors = total_d_out / VECTOR_SIZE;
-  // int remainder = total_d_out % VECTOR_SIZE;
   
-  // Vectorized portion
   const float4 *src_vec = reinterpret_cast<const float4*>(src_row);
   float4 *dst_vec = reinterpret_cast<float4*>(dst_row);
   
@@ -346,7 +346,6 @@ __global__ void scatter_add_kernel_vectorized(T *y, const T *y_sorted,
     float4 val = src_vec[vec_idx];
     if (add_inputs) {
       float4 existing = dst_vec[vec_idx];
-      // Add element-wise (reinterpret as T array)
       T *val_arr = reinterpret_cast<T*>(&val);
       T *existing_arr = reinterpret_cast<T*>(&existing);
       #pragma unroll
@@ -357,7 +356,6 @@ __global__ void scatter_add_kernel_vectorized(T *y, const T *y_sorted,
     dst_vec[vec_idx] = val;
   }
   
-  // Handle remainder elements (non-vectorized)
   int base_col = num_vectors * VECTOR_SIZE;
   for (int col = base_col + threadIdx.x; col < total_d_out; col += blockDim.x) {
     if (add_inputs) {
@@ -368,7 +366,7 @@ __global__ void scatter_add_kernel_vectorized(T *y, const T *y_sorted,
   }
 }
 
-// Fallback scalar kernel for small sizes or alignment issues
+// Scalar scatter-add kernel for small sizes or alignment issues
 template <typename T>
 __global__ void scatter_add_kernel_scalar(T *y, const T *y_sorted, 
                                           const int32_t *indices,
@@ -391,7 +389,6 @@ __global__ void scatter_add_kernel_scalar(T *y, const T *y_sorted,
   }
 }
 
-// Dispatch function to choose optimal kernel
 template <typename T>
 void launch_scatter_add(T *y, const T *y_sorted, 
                         const int32_t *indices,
@@ -400,7 +397,6 @@ void launch_scatter_add(T *y, const T *y_sorted,
                         bool add_inputs, cudaStream_t stream) {
   constexpr int VECTOR_SIZE = sizeof(float4) / sizeof(T);
   
-  // Check alignment for vectorized kernel
   bool src_aligned = (reinterpret_cast<uintptr_t>(y_sorted) % sizeof(float4)) == 0;
   bool dst_aligned = (reinterpret_cast<uintptr_t>(y) % sizeof(float4)) == 0;
   bool stride_aligned = (y_stride % VECTOR_SIZE == 0) && (y_sorted_stride % VECTOR_SIZE == 0);
@@ -438,6 +434,7 @@ bool run_sgmv_expand_kernel(DType *y,
                             int num_slices,
                             int num_tokens,
                             int d_in,
+                            int max_loras,
                             bool add_inputs,
                             cudaStream_t stream) {
   using cutlass_t = typename cutlass_dtype<DType>::type;
@@ -450,13 +447,6 @@ bool run_sgmv_expand_kernel(DType *y,
 
   int total_problems = num_lora_indices * num_slices;
   int total_d_out = static_cast<int>(y_row_stride);
-
-  // Note: We skip memset on y_sorted because:
-  // 1. The GEMM kernel writes to all token positions when all tokens have valid LoRAs
-  // 2. The scatter kernel will overwrite all positions in y anyway
-  // If you need guaranteed zeros for no-lora tokens, uncomment the memset below:
-  // size_t y_sorted_size = static_cast<size_t>(num_tokens) * y_sorted_stride * sizeof(DType);
-  // cudaMemsetAsync(y_sorted, 0, y_sorted_size, stream);
 
   auto ptr_Y = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
   auto ptr_X = alloc_from_buf<cutlass_t *>(&tmp_d, total_problems);
@@ -474,10 +464,15 @@ bool run_sgmv_expand_kernel(DType *y,
       (cutlass_t **)w,
       w_lora_strides,
       lora_token_start_loc, active_lora_ids, d_out_per_slice,
-      num_lora_indices, num_slices, d_in);
+      num_lora_indices, num_slices, d_in, max_loras);
+
+  cudaError_t precompute_err = cudaGetLastError();
+  if (precompute_err != cudaSuccess) {
+    return false;
+  }
 
   cutlass::KernelHardwareInfo hw_info;
-  hw_info.device_id = 0;
+  cudaGetDevice(&hw_info.device_id);
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
 
   typename Gemm::Arguments arguments{
@@ -489,38 +484,28 @@ bool run_sgmv_expand_kernel(DType *y,
   };
 
   Gemm gemm;
-
-  auto status = gemm.can_implement(arguments);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_expand can_implement failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.can_implement(arguments) != cutlass::Status::kSuccess) {
     return false;
   }
 
   size_t workspace_size = Gemm::get_workspace_size(arguments);
   void *workspace = nullptr;
   if (workspace_size > 0) {
-    cudaError_t cuda_status = cudaMallocAsync(&workspace, workspace_size, stream);
-    if (cuda_status != cudaSuccess) {
-      fprintf(stderr, "sgmv_expand workspace allocation failed: %s\n", cudaGetErrorString(cuda_status));
+    if (cudaMallocAsync(&workspace, workspace_size, stream) != cudaSuccess) {
       return false;
     }
   }
 
-  status = gemm.initialize(arguments, workspace, stream);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_expand initialize failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.initialize(arguments, workspace, stream) != cutlass::Status::kSuccess) {
     if (workspace) cudaFreeAsync(workspace, stream);
     return false;
   }
 
-  status = gemm.run(stream);
-  if (status != cutlass::Status::kSuccess) {
-    fprintf(stderr, "sgmv_expand run failed: %s\n", cutlassGetStatusString(status));
+  if (gemm.run(stream) != cutlass::Status::kSuccess) {
     if (workspace) cudaFreeAsync(workspace, stream);
     return false;
   }
 
-  // Launch optimized scatter kernel
   launch_scatter_add(y, y_sorted, token_indices_sorted, num_tokens, total_d_out, 
                      y_row_stride, y_sorted_stride, add_inputs, stream);
 
@@ -541,6 +526,7 @@ bool sgmv_shrink_vllm(DType *y, int64_t y_slice_stride,
                       int num_tokens,
                       int d_in,
                       int d_out,
+                      int max_loras,
                       cudaStream_t stream);
 
 template <typename DType>
@@ -561,5 +547,6 @@ bool sgmv_expand_vllm(DType *y,
                       int num_slices,
                       int num_tokens,
                       int d_in,
+                      int max_loras,
                       bool add_inputs,
                       cudaStream_t stream);

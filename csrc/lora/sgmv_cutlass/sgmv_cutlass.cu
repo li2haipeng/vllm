@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 #include "sgmv_cutlass.cuh"
 
 template <>
@@ -13,11 +15,12 @@ bool sgmv_shrink_vllm<nv_half>(nv_half *y, int64_t y_slice_stride,
                                int num_tokens,
                                int d_in,
                                int d_out,
+                               int max_loras,
                                cudaStream_t stream) {
   return run_sgmv_shrink_kernel<ShrinkConfig>(
       y, y_slice_stride, x_sorted, w, w_lora_stride,
       lora_token_start_loc, active_lora_ids, tmp_d,
-      num_lora_indices, num_slices, num_tokens, d_in, d_out, stream);
+      num_lora_indices, num_slices, num_tokens, d_in, d_out, max_loras, stream);
 }
 
 template <>
@@ -33,11 +36,12 @@ bool sgmv_shrink_vllm<nv_bfloat16>(nv_bfloat16 *y, int64_t y_slice_stride,
                                    int num_tokens,
                                    int d_in,
                                    int d_out,
+                                   int max_loras,
                                    cudaStream_t stream) {
   return run_sgmv_shrink_kernel<ShrinkConfigBf16>(
       y, y_slice_stride, x_sorted, w, w_lora_stride,
       lora_token_start_loc, active_lora_ids, tmp_d,
-      num_lora_indices, num_slices, num_tokens, d_in, d_out, stream);
+      num_lora_indices, num_slices, num_tokens, d_in, d_out, max_loras, stream);
 }
 
 template <>
@@ -58,6 +62,7 @@ bool sgmv_expand_vllm<nv_half>(nv_half *y,
                                int num_slices,
                                int num_tokens,
                                int d_in,
+                               int max_loras,
                                bool add_inputs,
                                cudaStream_t stream) {
   return run_sgmv_expand_kernel<ExpandConfig>(
@@ -65,7 +70,7 @@ bool sgmv_expand_vllm<nv_half>(nv_half *y,
       x, x_slice_stride, w, w_lora_strides,
       lora_token_start_loc, active_lora_ids, token_indices_sorted,
       d_out_per_slice, tmp_d, y_sorted, y_sorted_stride,
-      num_lora_indices, num_slices, num_tokens, d_in, add_inputs, stream);
+      num_lora_indices, num_slices, num_tokens, d_in, max_loras, add_inputs, stream);
 }
 
 template <>
@@ -86,6 +91,7 @@ bool sgmv_expand_vllm<nv_bfloat16>(nv_bfloat16 *y,
                                    int num_slices,
                                    int num_tokens,
                                    int d_in,
+                                   int max_loras,
                                    bool add_inputs,
                                    cudaStream_t stream) {
   return run_sgmv_expand_kernel<ExpandConfigBf16>(
@@ -93,5 +99,5 @@ bool sgmv_expand_vllm<nv_bfloat16>(nv_bfloat16 *y,
       x, x_slice_stride, w, w_lora_strides,
       lora_token_start_loc, active_lora_ids, token_indices_sorted,
       d_out_per_slice, tmp_d, y_sorted, y_sorted_stride,
-      num_lora_indices, num_slices, num_tokens, d_in, add_inputs, stream);
+      num_lora_indices, num_slices, num_tokens, d_in, max_loras, add_inputs, stream);
 }

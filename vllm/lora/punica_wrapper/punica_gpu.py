@@ -84,9 +84,13 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         
         tmp_size = num_lora_indices * self._max_slices * 1024
         self._cutlass_tmp = torch.zeros(tmp_size, dtype=torch.uint8, device=device)
-        self._w_ptr_buffer = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
+        # Separate w_ptr buffers for shrink and expand to avoid race conditions
+        self._w_ptr_buffer_shrink = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
+        self._w_ptr_buffer_expand = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         
-        self._max_hidden_size = 32768
+        # Max hidden size needs to accommodate large models like Llama-70B
+        # gate_up_proj can have output size up to 57344 (14336 * 4) or larger
+        self._max_hidden_size = 65536
         self._y_sorted_buffer_fp16 = torch.empty(
             (max_num_batched_tokens, self._max_hidden_size),
             dtype=torch.float16, device=device
@@ -230,7 +234,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             y, x, list(lora_a_stacked),
             token_lora_mapping, token_indices_sorted, token_indices_sorted_int64,
             num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag,
-            self._cutlass_tmp, self._w_ptr_buffer, scale)
+            self._cutlass_tmp, self._w_ptr_buffer_shrink, scale)
 
     def add_cutlass_expand(
         self,
@@ -271,12 +275,17 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         
         y_sorted_buffer = self._y_sorted_buffer_fp16 if x.dtype == torch.float16 else self._y_sorted_buffer_bf16
         
+        # Zero the y_sorted buffer to ensure tokens without LoRA contribute zero
+        # Only zero the portion we'll use to minimize overhead
+        total_d_out = y.size(1)
+        y_sorted_buffer[:num_tokens, :total_d_out].zero_()
+        
         cutlass_expand(
             y, x, list(lora_b_stacked),
             list(output_slices), offset_start,
             token_lora_mapping, token_indices_sorted,
             num_tokens_per_lora, lora_token_start_loc, active_lora_ids, no_lora_flag,
-            self._cutlass_tmp, self._w_ptr_buffer, y_sorted_buffer,
+            self._cutlass_tmp, self._w_ptr_buffer_expand, y_sorted_buffer,
             self._d_out_per_slice_buffer, self._slice_start_loc_buffer,
             self._w_lora_strides_buffer,
             self._d_out_per_slice_cpu, self._slice_start_loc_cpu,
@@ -426,7 +435,8 @@ class PunicaWrapperGPU(PunicaWrapperBase):
 
         if USE_CUTLASS_LORA:
             # CUTLASS path: use same dtype as input
-            buffer = torch.empty(
+            # Zero the buffer to ensure tokens without LoRA contribute zero
+            buffer = torch.zeros(
                 (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
             )
             self.add_cutlass_shrink(buffer, x, lora_a_stacked, scale, **kwargs)

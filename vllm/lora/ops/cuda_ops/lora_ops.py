@@ -1,6 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""CUTLASS SGMV LoRA kernel Python wrappers."""
+
 import torch
-import vllm._lora_C  # noqa: F401 - triggers torch op registration
+
+import vllm._lora_C  # noqa: F401
 from vllm.utils.torch_utils import direct_register_custom_op
+
 
 @torch.inference_mode()
 def _cutlass_shrink(
@@ -18,14 +24,16 @@ def _cutlass_shrink(
     w_ptr_buffer: torch.Tensor,
     scale: float,
 ) -> None:
-    """CUTLASS SGMV shrink kernel wrapper."""
+    if no_lora_flag_cpu.item():
+        return
+
     num_tokens = x.size(0)
-    # PyTorch's caching allocator typically reuses the same address for same-sized allocations
-    x_sorted = torch.index_select(x, 0, token_indices_sorted_int64[:num_tokens])
-    torch.ops._lora_C.dispatch_sgmv_shrink_vllm(
-        y, x_sorted, lora_a_weights,
-        lora_token_start_loc, lora_ids,
-        cutlass_tmp, w_ptr_buffer)
+    x_sorted = torch.index_select(x, 0,
+                                  token_indices_sorted_int64[:num_tokens])
+
+    torch.ops._lora_C.dispatch_sgmv_shrink_vllm(y, x_sorted, lora_a_weights,
+                                                lora_token_start_loc, lora_ids,
+                                                cutlass_tmp, w_ptr_buffer)
 
 
 def _cutlass_shrink_fake(
@@ -43,7 +51,6 @@ def _cutlass_shrink_fake(
     w_ptr_buffer: torch.Tensor,
     scale: float,
 ) -> None:
-    """Fake implementation for torch.compile tracing."""
     return
 
 
@@ -71,39 +78,40 @@ def _cutlass_expand(
     w_lora_strides_cpu: torch.Tensor,
     add_inputs: bool,
 ) -> None:
-    """CUTLASS SGMV expand kernel wrapper."""
+    if no_lora_flag_cpu.item():
+        return
+
     num_tokens = x.size(1)
     num_slices = len(lora_b_weights)
     total_d_out = y.size(1)
-    
+
+    # Prepare slice metadata
     for i, s in enumerate(output_slices):
         d_out_per_slice_cpu[i] = s
-    d_out_per_slice_buffer[:num_slices].copy_(d_out_per_slice_cpu[:num_slices], non_blocking=True)
-    
+    d_out_per_slice_buffer[:num_slices].copy_(d_out_per_slice_cpu[:num_slices],
+                                              non_blocking=True)
+
     slice_start = offset_start
     for i in range(num_slices):
         slice_start_loc_cpu[i] = slice_start
         if i < num_slices - 1:
             slice_start += output_slices[i]
-    slice_start_loc_buffer[:num_slices].copy_(slice_start_loc_cpu[:num_slices], non_blocking=True)
-    
+    slice_start_loc_buffer[:num_slices].copy_(slice_start_loc_cpu[:num_slices],
+                                              non_blocking=True)
+
     for i, w in enumerate(lora_b_weights):
         w_lora_strides_cpu[i] = w.stride(0)
-    w_lora_strides_buffer[:num_slices].copy_(w_lora_strides_cpu[:num_slices], non_blocking=True)
-    
+    w_lora_strides_buffer[:num_slices].copy_(w_lora_strides_cpu[:num_slices],
+                                             non_blocking=True)
+
     y_sorted = y_sorted_buffer[:num_tokens, :total_d_out]
-    
+
     torch.ops._lora_C.dispatch_sgmv_expand_vllm(
-        y, x, lora_b_weights,
-        lora_token_start_loc, lora_ids,
+        y, x, lora_b_weights, lora_token_start_loc, lora_ids,
         d_out_per_slice_buffer[:num_slices],
         slice_start_loc_buffer[:num_slices],
-        w_lora_strides_buffer[:num_slices],
-        cutlass_tmp,
-        token_indices_sorted,
-        y_sorted,
-        w_ptr_buffer,
-        add_inputs)
+        w_lora_strides_buffer[:num_slices], cutlass_tmp, token_indices_sorted,
+        y_sorted, w_ptr_buffer, add_inputs)
 
 
 def _cutlass_expand_fake(
@@ -129,11 +137,10 @@ def _cutlass_expand_fake(
     w_lora_strides_cpu: torch.Tensor,
     add_inputs: bool,
 ) -> None:
-    """Fake implementation for torch.compile tracing."""
     return
 
 
-# Register custom ops
+# Register custom ops for torch.compile compatibility
 try:
     direct_register_custom_op(
         op_name="cutlass_shrink",

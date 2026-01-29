@@ -25,6 +25,7 @@ class CutlassLoRAKernelMeta:
     num_tokens_per_lora: torch.Tensor
     lora_token_start_loc: torch.Tensor
     no_lora_flag_cpu: torch.Tensor
+    num_active_loras: int = 0  # Track actual number of active LoRAs
 
     @staticmethod
     def make(
@@ -63,6 +64,7 @@ class CutlassLoRAKernelMeta:
             num_tokens_per_lora=num_tokens_per_lora,
             lora_token_start_loc=lora_token_start_loc,
             no_lora_flag_cpu=no_lora_flag_cpu,
+            num_active_loras=0,
         )
 
     def _reset(self):
@@ -71,6 +73,7 @@ class CutlassLoRAKernelMeta:
         self.lora_token_start_loc.fill_(0)
         self.no_lora_flag_cpu.fill_(False)
         self.token_indices_sorted_by_lora_ids.fill_(0)
+        self.num_active_loras = 0
 
     def prepare_tensors(self, token_lora_mapping: torch.Tensor) -> None:
         """
@@ -91,6 +94,7 @@ class CutlassLoRAKernelMeta:
                         out=self.token_indices_sorted_by_lora_ids[:num_tokens])
             self.token_indices_sorted_int64[:num_tokens].copy_(
                 self.token_indices_sorted_by_lora_ids[:num_tokens])
+            self.num_active_loras = 0
             return
 
         self.token_lora_mapping[:num_tokens].copy_(
@@ -111,6 +115,10 @@ class CutlassLoRAKernelMeta:
         lora_ids, num_tokens_per_lora = torch.unique(
             token_lora_mapping, sorted=True, return_counts=True
         )
+        
+        # Track actual number of active LoRAs (including -1 group if present)
+        self.num_active_loras = lora_ids.size(0)
+        
         self.active_lora_ids[: lora_ids.size(0)].copy_(lora_ids, non_blocking=True)
         self.num_tokens_per_lora[: num_tokens_per_lora.size(0)].copy_(
             num_tokens_per_lora, non_blocking=True
@@ -135,13 +143,15 @@ class CutlassLoRAKernelMeta:
         """
         Returns kernel metadata for CUTLASS kernels.
         Includes token_indices_sorted_int64 for index_select operations.
+        Only returns the active portion of metadata tensors.
         """
+        n = self.num_active_loras if self.num_active_loras > 0 else 1
         return (
             self.token_lora_mapping[:token_nums],
             self.token_indices_sorted_by_lora_ids[:token_nums],
             self.token_indices_sorted_int64[:token_nums],
-            self.num_tokens_per_lora,
-            self.lora_token_start_loc,
-            self.active_lora_ids,
+            self.num_tokens_per_lora[:n],
+            self.lora_token_start_loc[:n + 1],
+            self.active_lora_ids[:n],
             self.no_lora_flag_cpu,
         )

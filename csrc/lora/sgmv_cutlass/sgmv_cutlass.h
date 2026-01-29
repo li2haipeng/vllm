@@ -18,6 +18,7 @@ bool sgmv_shrink_vllm(DType *y, int64_t y_slice_stride,
                       int num_tokens,
                       int d_in,
                       int d_out,
+                      int max_loras,
                       cudaStream_t stream);
 
 template <typename DType>
@@ -38,5 +39,6 @@ bool sgmv_expand_vllm(DType *y,
                       int num_slices,
                       int num_tokens,
                       int d_in,
+                      int max_loras,
                       bool add_inputs,
                       cudaStream_t stream);
