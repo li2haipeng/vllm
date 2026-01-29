@@ -27,13 +27,20 @@ from vllm import _custom_ops as ops
 
 from .punica_base import PunicaWrapperBase
 
-USE_CUTLASS_LORA = True
+USE_CUTLASS_LORA = False
+USE_BGMV_LORA = True
 
 if USE_CUTLASS_LORA:
     from vllm.lora.ops.cuda_ops import(
         CutlassLoRAKernelMeta,
         cutlass_shrink,
-        cutlass_expand
+        cutlass_expand,
+    )
+
+if USE_BGMV_LORA:
+    from vllm.lora.ops.cuda_ops import(
+        bgmv_shrink,
+        bgmv_expand,
     )
 
 
@@ -69,12 +76,18 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             self.max_loras, max_num_batched_tokens, device=device
         )
         
-        # CUTLASS kernel metadata (separate to avoid affecting Triton)
+        # CUTLASS kernel metadata
         if USE_CUTLASS_LORA:
             self._init_cutlass_buffers(max_num_batched_tokens, device)
+        
+        # BGMV kernel buffers
+        if USE_BGMV_LORA:
+            self._init_bgmv_buffers(max_num_batched_tokens, device)
 
     def _init_cutlass_buffers(self, max_num_batched_tokens: int, device: torch.device | str):
         """Initialize pre-allocated buffers for CUTLASS kernels."""
+        from vllm.lora.ops.cuda_ops import CutlassLoRAKernelMeta
+        
         self.cutlass_token_mapping_meta = CutlassLoRAKernelMeta.make(
             self.max_loras, max_num_batched_tokens, device=device
         )
@@ -88,7 +101,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         self._w_ptr_buffer_shrink = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         self._w_ptr_buffer_expand = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
         
-        # Max hidden size needs to accommodate large models like Llama-70B
+        # Max hidden size needs to accommodate large models
         # gate_up_proj can have output size up to 57344 (14336 * 4) or larger
         self._max_hidden_size = 65536
         self._y_sorted_buffer_fp16 = torch.empty(
@@ -108,6 +121,29 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         self._slice_start_loc_cpu = torch.zeros(self._max_slices, dtype=torch.int64, pin_memory=True)
         self._w_lora_strides_cpu = torch.zeros(self._max_slices, dtype=torch.int64, pin_memory=True)
 
+    def _init_bgmv_buffers(self, max_num_batched_tokens: int, device: torch.device | str):
+        """Initialize pre-allocated buffers for BGMV kernels."""
+        self._max_slices = 3
+        
+        # BGMV uses per-token indices (int64) instead of sorted token groups
+        self._bgmv_indices = torch.empty(
+            max_num_batched_tokens, dtype=torch.int64, device=device
+        )
+        self._bgmv_w_ptr_buffer_shrink = torch.zeros(
+            self._max_slices, dtype=torch.int64, device=device
+        )
+        self._bgmv_w_ptr_buffer_expand = torch.zeros(
+            self._max_slices, dtype=torch.int64, device=device
+        )
+        # CPU tensor for no_lora flag (for cudagraph compatibility)
+        self._bgmv_no_lora_flag_cpu = torch.tensor([False], dtype=torch.bool, device="cpu")
+        
+        # Buffers for expand slice metadata
+        self._bgmv_d_out_per_slice_buffer = torch.zeros(self._max_slices, dtype=torch.int32, device=device)
+        self._bgmv_slice_start_loc_buffer = torch.zeros(self._max_slices, dtype=torch.int64, device=device)
+        self._bgmv_d_out_per_slice_cpu = torch.zeros(self._max_slices, dtype=torch.int32, pin_memory=True)
+        self._bgmv_slice_start_loc_cpu = torch.zeros(self._max_slices, dtype=torch.int64, pin_memory=True)
+
     def update_metadata(
         self,
         mapping: LoRAMapping,
@@ -126,6 +162,16 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         # Prepare CUTLASS kernel metadata
         if USE_CUTLASS_LORA:
             self.cutlass_token_mapping_meta.prepare_tensors(self.token_lora_indices)
+        
+        # Prepare BGMV kernel metadata
+        if USE_BGMV_LORA:
+            # Prepare BGMV indices (int64 version of token_lora_indices)
+            num_tokens = self.token_lora_indices.size(0)
+            self._bgmv_indices[:num_tokens].copy_(
+                self.token_lora_indices.to(torch.int64), non_blocking=True
+            )
+            # Update no_lora flag for BGMV
+            self._bgmv_no_lora_flag_cpu[0] = torch.all(self.token_lora_indices == -1)
 
     def add_shrink(
         self,
@@ -303,20 +349,31 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         **kwargs,
     ) -> None:
         """
-        Performs GEMM for multiple slices of lora_a using CUTLASS.
+        Performs GEMM for multiple slices of lora_a using BGMV kernel.
+        
+        BGMV uses per-token indices directly without sorting, which can be
+        more efficient for certain workloads.
 
         Semantics:
         for i in range(len(lora_a_stacked)):
             y[i] += (x @ lora_a_stacked[i]) * scale
 
         Args:
-            y (torch.Tensor): Output tensors
-            x (torch.Tensor): Input tensor
+            y (torch.Tensor): Output tensors [num_slices, num_tokens, lora_rank]
+            x (torch.Tensor): Input tensor [num_tokens, hidden_size]
             lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weights
-            scale (float): Scaling factor for the operation
+                Each tensor has shape [num_loras, 1, lora_rank, hidden_size]
+            scale (float): Scaling factor for the operation (applied in kernel)
         """
         x = x.view(-1, x.shape[-1])
-
+        num_tokens = x.size(0)
+        
+        bgmv_shrink(
+            y, x, list(lora_a_stacked),
+            self._bgmv_indices[:num_tokens],
+            self._bgmv_no_lora_flag_cpu,
+            self._bgmv_w_ptr_buffer_shrink,
+        )
 
     def add_bgmv_expand(
         self,
@@ -329,7 +386,9 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         **kwargs,
     ) -> None:
         """
-        Performs GEMM for multiple slices of lora_b using CUTLASS.
+        Performs GEMM for multiple slices of lora_b using BGMV kernel.
+        
+        BGMV uses per-token indices directly without sorting.
 
         Semantics:
             for i in range(len(lora_b_stacked)):
@@ -338,26 +397,32 @@ class PunicaWrapperGPU(PunicaWrapperBase):
                 offset += slice
 
         Args:
-            y (torch.Tensor): Output tensor.
-            x (torch.Tensor): Input tensors
+            y (torch.Tensor): Output tensor [num_tokens, total_d_out]
+            x (torch.Tensor): Input tensors [num_slices, num_tokens, lora_rank]
             lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight
+                Each tensor has shape [num_loras, 1, d_out_slice, lora_rank]
             output_slices (tuple[int, ...]): Every slice's size
-            add_inputs (bool): Defaults to True.
+            offset_start (int): Starting column offset in output
+            add_inputs (bool): Whether to add to existing y values. Defaults to True.
         """
         y_org = y
         y = y.view(-1, y.shape[-1])
 
         assert x.ndim == 3
         assert x.size(0) == len(output_slices)
-        num_tokens = x.size(1)  # first dimension is the num slices
-
-        lora_expand(
-            x,
-            lora_b_stacked,
-            y,
-            *self.token_mapping_meta.meta_args(num_tokens),
-            offset_start=offset_start,
-            add_inputs=True,
+        num_tokens = x.size(1)
+        
+        bgmv_expand(
+            y, x, list(lora_b_stacked),
+            list(output_slices), offset_start,
+            self._bgmv_indices[:num_tokens],
+            self._bgmv_no_lora_flag_cpu,
+            self._bgmv_w_ptr_buffer_expand,
+            self._bgmv_d_out_per_slice_buffer,
+            self._bgmv_slice_start_loc_buffer,
+            self._bgmv_d_out_per_slice_cpu,
+            self._bgmv_slice_start_loc_cpu,
+            add_inputs,
         )
 
         y = y.view_as(y_org)
@@ -433,7 +498,15 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         )
         r = lora_b_stacked[0].size(-1)
 
-        if USE_CUTLASS_LORA:
+        if USE_BGMV_LORA:
+            # BGMV path: use same dtype as input
+            # Zero the buffer to ensure tokens without LoRA contribute zero
+            buffer = torch.zeros(
+                (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
+            )
+            self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+            self.add_bgmv_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
+        elif USE_CUTLASS_LORA:
             # CUTLASS path: use same dtype as input
             # Zero the buffer to ensure tokens without LoRA contribute zero
             buffer = torch.zeros(
@@ -451,6 +524,57 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             )
             self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
             self.add_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
+
+    def add_lora_linear_bgmv(
+        self,
+        y: torch.Tensor,
+        x: torch.Tensor,
+        lora_a_stacked: tuple[torch.Tensor, ...],
+        lora_b_stacked: tuple[torch.Tensor, ...],
+        scale: float,
+        output_slices: tuple[int, ...],
+        *,
+        buffer: torch.Tensor | None = None,
+        **kwargs,
+    ) -> None:
+        """
+        Applicable to linear-related lora using BGMV kernels.
+        
+        BGMV kernels use per-token indices directly without sorting,
+        which can be more efficient for certain workloads.
+
+        Semantics:
+            for i in range(len(lora_a_stacked)):
+                y[i] += (
+                    x[i].unsqueeze(0)
+                    @ lora_a_stacked[indices[i], layer_idx, :, :]
+                    @ lora_b_stacked[indices[i], layer_idx, :, :]
+                    * scale
+                    ).squeeze(0)
+        Args:
+            y (torch.Tensor): Output tensor. Will be changed in-place.
+            x (torch.Tensor): Input tensor
+            lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weight.
+            lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight.
+            scale (float): Scaling factor.
+            output_slices (tuple[int, ...]): Every slice's size.
+            buffer (Optional[torch.Tensor]): Defaults to None.
+        """
+        assert len(lora_a_stacked) == len(lora_b_stacked) == len(output_slices)
+
+        assert buffer is None, (
+            "To minimize overhead, the buffer should be created by "
+            ".add_lora_linear_bgmv() instead of being passed in."
+        )
+        r = lora_b_stacked[0].size(-1)
+
+        # BGMV path: use same dtype as input
+        # Zero the buffer to ensure tokens without LoRA contribute zero
+        buffer = torch.zeros(
+            (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
+        )
+        self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        self.add_bgmv_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
 
     def add_lora_logits(
         self,

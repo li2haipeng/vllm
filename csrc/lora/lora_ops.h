@@ -2,10 +2,7 @@
 
 #include <torch/all.h>
 
-// x_sorted: input gathered by token_indices_sorted_by_lora_ids
-// lora_token_start_loc: [num_lora_indices + 1] cumsum of tokens per lora group
-// active_lora_ids: [num_lora_indices] actual lora IDs for each group
-// w_ptr: pre-allocated buffer for weight pointers (for cudagraph compatibility)
+
 void dispatch_sgmv_shrink_vllm(torch::Tensor y, torch::Tensor x_sorted,
                                torch::TensorList w_list,
                                torch::Tensor lora_token_start_loc,
@@ -13,12 +10,7 @@ void dispatch_sgmv_shrink_vllm(torch::Tensor y, torch::Tensor x_sorted,
                                torch::Tensor tmp,
                                torch::Tensor w_ptr);
 
-// y: output tensor (scatter is done internally)
-// x: input in sorted order (from shrink output)
-// token_indices_sorted: indices for scatter operation
-// y_sorted: pre-allocated buffer for intermediate sorted output
-// w_ptr: pre-allocated buffer for weight pointers (for cudagraph compatibility)
-// add_inputs: whether to add to existing y values
+
 void dispatch_sgmv_expand_vllm(torch::Tensor y, torch::Tensor x,
                                torch::TensorList w_list,
                                torch::Tensor lora_token_start_loc,
@@ -32,17 +24,12 @@ void dispatch_sgmv_expand_vllm(torch::Tensor y, torch::Tensor x,
                                torch::Tensor w_ptr,
                                bool add_inputs);
 
-// BGMV multi-slice operations
-// Shrink: input [num_tokens, hidden_size] -> output [num_slices, num_tokens, lora_rank]
-// Weights: list of [num_loras, lora_rank, hidden_size] per slice (vLLM format)
-// indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+
 void dispatch_bgmv_shrink_sliced(torch::Tensor y, torch::Tensor x,
                                   torch::Tensor w_ptr, torch::Tensor indices);
 
-// Expand: input [num_slices, num_tokens, lora_rank] -> output [num_tokens, sum(d_out_per_slice)]
-// Weights: list of [num_loras, hidden_size, lora_rank] per slice (vLLM format)
-// indices: [num_tokens] per-token lora mapping (indices[token_idx] -> lora_id)
+
 void dispatch_bgmv_expand_sliced(torch::Tensor y, torch::Tensor x,
                                   torch::Tensor w_ptr, torch::Tensor indices,
-                                  torch::Tensor d_out_per_slice,
-                                  torch::Tensor slice_start_loc);
+                                  torch::Tensor slice_start_loc,
+                                  std::vector<int64_t> output_slices);

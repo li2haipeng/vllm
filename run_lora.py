@@ -3,7 +3,7 @@ from vllm.lora.request import LoRARequest
 
 llm = LLM(model="/home/ubuntu/models/Llama-3.3-70B-Instruct-FP8-dynamic-mlp-only", 
           enable_lora=True, 
-          tensor_parallel_size=4, 
+          tensor_parallel_size=8, 
           enforce_eager=False,
           max_num_batched_tokens=16384,
           max_model_len=16384,

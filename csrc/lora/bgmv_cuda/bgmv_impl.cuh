@@ -12,18 +12,6 @@
 
 namespace cg = cooperative_groups;
 
-// ============================================================================
-// Multi-slice BGMV kernels for vLLM compatibility
-// True BGMV style: per-token indices mapping, with slice parallelism via blockIdx.z
-// ============================================================================
-
-// Multi-slice shrink kernel (BGMV style with per-token indices)
-// Input: X [num_tokens, feat_in]
-// Output: Y [num_slices, num_tokens, feat_out]
-// Weights: w_ptr[slice_id] -> [num_loras, feat_out, feat_in]
-// Indices: indices[token_idx] -> lora_id for that token
-// Grid: (feat_out, num_tokens, num_slices)
-// Each block computes one output element for one token, one slice
 template <int feat_in, int feat_out, size_t vec_size, size_t X_copy_size,
           size_t W_copy_size, int tx, int ty, typename in_T, typename out_T,
           typename W_T>
@@ -156,13 +144,6 @@ bgmv_shrink_sliced_kernel(out_T *__restrict__ Y,
 }
 
 
-// Multi-slice expand kernel (BGMV style with per-token indices)
-// Input: X [num_slices, num_tokens, feat_in]
-// Output: Y [num_tokens, total_feat_out] (2D concatenated, vLLM format)
-// Weights: w_ptr[slice_id] -> [num_loras, feat_out, feat_in]
-// Indices: indices[token_idx] -> lora_id for that token
-// slice_start_loc[slice_id] = column offset in output for this slice
-// Grid: (feat_out / (ty * tz), num_tokens, num_slices)
 template <int feat_in, int feat_out, size_t vec_size, int tx, int ty, int tz,
           typename in_T, typename out_T, typename W_T>
 __global__ void
@@ -330,11 +311,6 @@ void bgmv_expand_sliced(out_T *__restrict__ Y,
       int64_t total_feat_out, int32_t current_feat_out, float scale);
 
 
-// ============================================================================
-// Original BGMV kernels (kept for backward compatibility)
-// ============================================================================
-
-// Shrink kernel: reduces from feat_in to feat_out (feat_in > feat_out)
 // nthrs = (tx, ty)
 template <int feat_in, int feat_out, size_t vec_size, size_t X_copy_size,
           size_t W_copy_size, int tx, int ty, typename in_T, typename out_T,
@@ -605,9 +581,6 @@ void bgmv_kernel(out_T *__restrict__ Y, const in_T *__restrict__ X,
   }
 }
 
-// ============================================================================
-// Instantiation macros
-// ============================================================================
 
 // Original BGMV instantiation
 #define INST_BGMV(feat_in, feat_out, in_T, out_T, W_T)                         \

@@ -8,7 +8,6 @@ void bgmv_kernel(out_T *__restrict__ Y, const in_T *__restrict__ X,
                  int64_t full_y_size, int64_t batch_size, int64_t num_layers,
                  int64_t layer_idx, float scale);
 
-// Multi-slice BGMV declarations (vLLM-compatible, BGMV style with per-token indices)
 template <int feat_in, int feat_out, typename in_T, typename out_T, typename W_T>
 void bgmv_shrink_sliced(out_T *__restrict__ Y,
                         const in_T *__restrict__ X,
@@ -33,14 +32,24 @@ void bgmv_expand_sliced(out_T *__restrict__ Y,
 // clang-format off
 
 #define FOR_BGMV_WIDE(f, in_T, out_T, W_T, narrow) \
+    f(in_T, out_T, W_T, narrow, 128) \
     f(in_T, out_T, W_T, narrow, 256) \
     f(in_T, out_T, W_T, narrow, 512) \
+    f(in_T, out_T, W_T, narrow, 640) \
+    f(in_T, out_T, W_T, narrow, 896) \
     f(in_T, out_T, W_T, narrow, 1024) \
+    f(in_T, out_T, W_T, narrow, 1280) \
+    f(in_T, out_T, W_T, narrow, 1792) \
     f(in_T, out_T, W_T, narrow, 2048) \
+    f(in_T, out_T, W_T, narrow, 2560) \
+    f(in_T, out_T, W_T, narrow, 3584) \
     f(in_T, out_T, W_T, narrow, 4096) \
     f(in_T, out_T, W_T, narrow, 5120) \
     f(in_T, out_T, W_T, narrow, 7168) \
     f(in_T, out_T, W_T, narrow, 8192) \
+    f(in_T, out_T, W_T, narrow, 10240) \
+    f(in_T, out_T, W_T, narrow, 14336) \
+    f(in_T, out_T, W_T, narrow, 28672) \
     
     
 // Keep above in sync with vllm/lora/layers::LogitsProcessorWithLoRA
@@ -51,7 +60,10 @@ void bgmv_expand_sliced(out_T *__restrict__ Y,
     // Using it for the fully sharded column
     // parallel LoRA A which splits the rank dim
 #define FOR_INST_BGMV_NARROW(f, in_T, out_T, W_T, narrow) \
+    f(in_T, out_T, W_T, 512, narrow) \
+    f(in_T, out_T, W_T, 1024, narrow) \
     f(in_T, out_T, W_T, 2048, narrow) \
+    f(in_T, out_T, W_T, 3584, narrow) \
     f(in_T, out_T, W_T, 4096, narrow) \
     f(in_T, out_T, W_T, 5120, narrow) \
     f(in_T, out_T, W_T, 7168, narrow) \
