@@ -7,7 +7,14 @@ llm = LLM(model="/home/ubuntu/models/Llama-3.3-70B-Instruct-FP8-dynamic-mlp-only
           enforce_eager=False,
           max_num_batched_tokens=16384,
           max_model_len=16384,
-          max_lora_rank=32)
+          max_lora_rank=32,
+          speculative_config={
+                "model": "/home/ubuntu/models/eagles/70b-eagle3",
+                "draft_tensor_parallel_size": 1,
+                "num_speculative_tokens": 5,
+                "method": "eagle3",
+            },
+        )
 
 sampling_params = SamplingParams(
     temperature=0,
