@@ -29,7 +29,7 @@ from vllm import _custom_ops as ops
 from .punica_base import PunicaWrapperBase
 
 USE_CUTLASS_LORA = False
-USE_BGMV_LORA = True
+USE_BGMV_LORA = False
 
 if USE_CUTLASS_LORA:
     from vllm.lora.ops.cuda_ops import(
@@ -138,8 +138,11 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         self._max_slices = 3
         
         # BGMV uses per-token indices (int64) instead of sorted token groups
-        self._bgmv_indices = torch.empty(
-            max_num_batched_tokens, dtype=torch.int64, device=device
+        # Initialize with -1 (no LoRA) to handle CUDA graph padding safely.
+        # When num_tokens_after_padding > actual_num_tokens, the extra indices
+        # will be -1, causing the kernel to skip those tokens.
+        self._bgmv_indices = torch.full(
+            (max_num_batched_tokens,), -1, dtype=torch.int64, device=device
         )
         self._bgmv_w_ptr_buffer_shrink = torch.zeros(
             self._max_slices, dtype=torch.int64, device=device
@@ -177,7 +180,7 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         
         # Prepare BGMV kernel metadata
         if USE_BGMV_LORA:
-            # Prepare BGMV indices (int64 version of token_lora_indices)
+            self._bgmv_indices.fill_(-1)
             num_tokens = self.token_lora_indices.size(0)
             self._bgmv_indices[:num_tokens].copy_(
                 self.token_lora_indices.to(torch.int64), non_blocking=True
