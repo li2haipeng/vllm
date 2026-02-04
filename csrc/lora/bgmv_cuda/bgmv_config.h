@@ -45,6 +45,7 @@ void bgmv_expand_sliced(out_T *__restrict__ Y,
     f(in_T, out_T, W_T, narrow, 3584) \
     f(in_T, out_T, W_T, narrow, 4096) \
     f(in_T, out_T, W_T, narrow, 5120) \
+    f(in_T, out_T, W_T, narrow, 6400) \
     f(in_T, out_T, W_T, narrow, 7168) \
     f(in_T, out_T, W_T, narrow, 8192) \
     f(in_T, out_T, W_T, narrow, 10240) \
