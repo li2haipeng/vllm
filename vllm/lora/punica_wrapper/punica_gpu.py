@@ -11,6 +11,7 @@ from typing import final
 
 import torch
 
+from vllm.forward_context import get_forward_context, is_forward_context_available
 from vllm.lora.layers import LoRAMapping
 from vllm.lora.utils import get_captured_lora_counts
 from vllm.triton_utils import HAS_TRITON, triton
@@ -29,7 +30,8 @@ from vllm import _custom_ops as ops
 from .punica_base import PunicaWrapperBase
 
 USE_CUTLASS_LORA = False
-USE_BGMV_LORA = False
+USE_BGMV_LORA = True
+SMALL_BATCH_THRESHOLD = 64
 
 if USE_CUTLASS_LORA:
     from vllm.lora.ops.cuda_ops import(
@@ -478,6 +480,16 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             add_inputs=add_inputs,
         )
 
+    def _get_cudagraph_batch_size(self) -> int | None:
+        try:
+            if is_forward_context_available():
+                ctx = get_forward_context()
+                if ctx.batch_descriptor is not None:
+                    return ctx.batch_descriptor.num_tokens
+        except (AttributeError, AssertionError):
+            pass
+        return None
+
     def add_lora_linear(
         self,
         y: torch.Tensor,
@@ -510,92 +522,49 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             output_slices (tuple[int, ...]): Every slice's size.
             buffer (Optional[torch.Tensor]): Defaults to None.
         """
-
         assert len(lora_a_stacked) == len(lora_b_stacked) == len(output_slices)
-
         assert buffer is None, (
             "To minimize overhead, the buffer should be created by "
             ".add_lora_linear() instead of being passed in."
         )
-        r = lora_b_stacked[0].size(-1)
-
-        if USE_BGMV_LORA:
-            # BGMV path: use same dtype as input
-            # Zero the buffer to ensure tokens without LoRA contribute zero
-            buffer = torch.zeros(
-                (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
-            )
-            self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-            self.add_bgmv_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
-        elif USE_CUTLASS_LORA:
-            # CUTLASS path: use same dtype as input
-            # Zero the buffer to ensure tokens without LoRA contribute zero
-            buffer = torch.zeros(
-                (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
-            )
-            self.add_cutlass_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-            self.add_cutlass_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
-        else:
-            # Triton path: use float32 buffer
-            # We set the buffer to be float32 by default, refer to:
-            # https://github.com/triton-lang/triton/issues/1387
-            # Note: buffer is zeroed inside the shrink op
-            buffer = torch.empty(
-                (len(output_slices), x.size(0), r), dtype=torch.float32, device=x.device
-            )
-            self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-            self.add_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
-
-    # def add_lora_linear_bgmv(
-    #     self,
-    #     y: torch.Tensor,
-    #     x: torch.Tensor,
-    #     lora_a_stacked: tuple[torch.Tensor, ...],
-    #     lora_b_stacked: tuple[torch.Tensor, ...],
-    #     scale: float,
-    #     output_slices: tuple[int, ...],
-    #     *,
-    #     buffer: torch.Tensor | None = None,
-    #     **kwargs,
-    # ) -> None:
-    #     """
-    #     Applicable to linear-related lora using BGMV kernels.
         
-    #     BGMV kernels use per-token indices directly without sorting,
-    #     which can be more efficient for certain workloads.
+        r = lora_b_stacked[0].size(-1)
+        # num_tokens = x.size(0)
+        # num_slices = len(lora_b_stacked)
+        
+        # cudagraph_batch_size = self._get_cudagraph_batch_size()
+        # batch_size_for_dispatch = cudagraph_batch_size if cudagraph_batch_size is not None else num_tokens
+        # is_small_batch = batch_size_for_dispatch <= SMALL_BATCH_THRESHOLD
 
-    #     Semantics:
-    #         for i in range(len(lora_a_stacked)):
-    #             y[i] += (
-    #                 x[i].unsqueeze(0)
-    #                 @ lora_a_stacked[indices[i], layer_idx, :, :]
-    #                 @ lora_b_stacked[indices[i], layer_idx, :, :]
-    #                 * scale
-    #                 ).squeeze(0)
-    #     Args:
-    #         y (torch.Tensor): Output tensor. Will be changed in-place.
-    #         x (torch.Tensor): Input tensor
-    #         lora_a_stacked (tuple[torch.Tensor, ...]): lora_a's weight.
-    #         lora_b_stacked (tuple[torch.Tensor, ...]): lora_b's weight.
-    #         scale (float): Scaling factor.
-    #         output_slices (tuple[int, ...]): Every slice's size.
-    #         buffer (Optional[torch.Tensor]): Defaults to None.
-    #     """
-    #     assert len(lora_a_stacked) == len(lora_b_stacked) == len(output_slices)
-
-    #     assert buffer is None, (
-    #         "To minimize overhead, the buffer should be created by "
-    #         ".add_lora_linear_bgmv() instead of being passed in."
-    #     )
-    #     r = lora_b_stacked[0].size(-1)
-
-    #     # BGMV path: use same dtype as input
-    #     # Zero the buffer to ensure tokens without LoRA contribute zero
-    #     buffer = torch.zeros(
-    #         (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
-    #     )
-    #     self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-    #     self.add_bgmv_expand(y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs)
+        buffer = torch.zeros(
+            (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
+        )
+        self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        self.add_expand(
+            y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        )
+        
+        # # BGMV shrink is temporarily disabled to debug memory access issue
+        # # When enabled: BGMV shrink for small batches, Triton shrink for large batches
+        # if is_small_batch and USE_BGMV_LORA:
+        #     buffer = torch.zeros(
+        #         (num_slices, num_tokens, r), dtype=x.dtype, device=x.device
+        #     )
+        #     self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        # else:
+        #     buffer = torch.empty(
+        #         (num_slices, num_tokens, r), dtype=torch.float32, device=x.device
+        #     )
+        #     self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        
+        # if not is_small_batch and num_slices > 1 and USE_CUTLASS_LORA:
+        #     self.add_cutlass_expand(
+        #         y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        #     )
+        # else:
+        #     self.add_expand(
+        #         y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        #     )
 
     def add_lora_logits(
         self,

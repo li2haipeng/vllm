@@ -1,18 +1,19 @@
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 
-llm = LLM(model="/home/ubuntu/models/Llama-3.3-70B-Instruct-FP8-dynamic-mlp-only", 
+llm = LLM(model="/home/ubuntu/models/Qwen3-32B", 
           enable_lora=True, 
-          tensor_parallel_size=8, 
-          enforce_eager=False,
+          max_loras=1,
+          tensor_parallel_size=4, 
+          enforce_eager=True,
           max_num_batched_tokens=16384,
           max_model_len=16384,
           max_lora_rank=32,
           speculative_config={
-                "model": "/home/ubuntu/models/eagles/70b-eagle3",
+                "model": "/home/ubuntu/models/eagles/qwen3-32b-fp8-eagle2",
                 "draft_tensor_parallel_size": 1,
                 "num_speculative_tokens": 5,
-                "method": "eagle3",
+                "method": "eagle",
             },
         )
 
@@ -25,7 +26,7 @@ sampling_params = SamplingParams(
 prompts = [
     "Hello, my name is Lora, and I am a",
 ]
-lora_path = "/home/ubuntu/models/loras/Llama-3.3-70B-Instruct-Lora/lora_adapter"
+lora_path = "/home/ubuntu/models/loras/Qwen3-32B-Lora/lora_adapter"
 outputs = llm.generate(
     prompts,
     sampling_params,
