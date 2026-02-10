@@ -31,7 +31,7 @@ from .punica_base import PunicaWrapperBase
 
 USE_CUTLASS_LORA = False
 USE_BGMV_LORA = True
-SMALL_BATCH_THRESHOLD = 64
+SMALL_BATCH_THRESHOLD = 16
 
 if USE_CUTLASS_LORA:
     from vllm.lora.ops.cuda_ops import(
@@ -529,42 +529,53 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         )
         
         r = lora_b_stacked[0].size(-1)
-        # num_tokens = x.size(0)
-        # num_slices = len(lora_b_stacked)
-        
-        # cudagraph_batch_size = self._get_cudagraph_batch_size()
-        # batch_size_for_dispatch = cudagraph_batch_size if cudagraph_batch_size is not None else num_tokens
-        # is_small_batch = batch_size_for_dispatch <= SMALL_BATCH_THRESHOLD
+        num_tokens = x.size(0)
+        num_slices = len(output_slices)
 
-        buffer = torch.zeros(
-            (len(output_slices), x.size(0), r), dtype=x.dtype, device=x.device
-        )
-        self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-        self.add_expand(
-            y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
-        )
-        
-        # # BGMV shrink is temporarily disabled to debug memory access issue
-        # # When enabled: BGMV shrink for small batches, Triton shrink for large batches
-        # if is_small_batch and USE_BGMV_LORA:
-        #     buffer = torch.zeros(
-        #         (num_slices, num_tokens, r), dtype=x.dtype, device=x.device
-        #     )
-        #     self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
-        # else:
-        #     buffer = torch.empty(
-        #         (num_slices, num_tokens, r), dtype=torch.float32, device=x.device
-        #     )
-        #     self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        ###### 1. bgmv+triton ####
+        # buffer = torch.zeros(
+        #     (num_slices, num_tokens, r), dtype=x.dtype, device=x.device
+        # )
+        # self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        # self.add_expand(
+        #     y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        # )
+
+        ####### 2. kernel routing #######
+        cudagraph_batch_size = self._get_cudagraph_batch_size()
+        batch_size_for_dispatch = cudagraph_batch_size if cudagraph_batch_size is not None else num_tokens
+        is_small_batch = batch_size_for_dispatch <= SMALL_BATCH_THRESHOLD
+        # BGMV shrink is temporarily disabled to debug memory access issue
+        # When enabled: BGMV shrink for small batches, Triton shrink for large batches
+        if is_small_batch and USE_BGMV_LORA:
+            buffer = torch.zeros(
+                (num_slices, num_tokens, r), dtype=x.dtype, device=x.device
+            )
+            self.add_bgmv_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        else:
+            buffer = torch.empty(
+                (num_slices, num_tokens, r), dtype=torch.float32, device=x.device
+            )
+            self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
         
         # if not is_small_batch and num_slices > 1 and USE_CUTLASS_LORA:
         #     self.add_cutlass_expand(
         #         y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
         #     )
         # else:
-        #     self.add_expand(
-        #         y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
-        #     )
+        self.add_expand(
+            y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        )
+
+        ####### 3. original triton implementation without kernel routing ####
+        # buffer = torch.empty(
+        #     (num_slices, num_tokens, r), dtype=torch.float32, device=x.device
+        # )
+        # self.add_shrink(buffer, x, lora_a_stacked, scale, **kwargs)
+        # self.add_expand(
+        #     y, buffer, lora_b_stacked, output_slices, add_inputs=True, **kwargs
+        # )
+
 
     def add_lora_logits(
         self,
